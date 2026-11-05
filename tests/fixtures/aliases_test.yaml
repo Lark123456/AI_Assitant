@@ -1,0 +1,6 @@
+friday_fast:
+  provider: fake
+  model: fake-model
+  params:
+    max_tokens: 128
+    timeout: 5

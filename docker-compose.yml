@@ -1,0 +1,73 @@
+services:
+  db:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-butler}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-butler}
+      POSTGRES_DB: ${POSTGRES_DB:-butler}
+    ports:
+      # 仅绑定本机回环，不暴露到局域网
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-butler} -d ${POSTGRES_DB:-butler}"]
+      interval: 2s
+      timeout: 2s
+      retries: 15
+
+  api:
+    build: .
+    command: uv run --no-dev uvicorn app.main:app --host 0.0.0.0 --port 8000
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      # compose 网络内用 db 主机名覆盖宿主机地址
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-butler}:${POSTGRES_PASSWORD:-butler}@db:5432/${POSTGRES_DB:-butler}
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+
+  worker:
+    build: .
+    command: uv run --no-dev python -m app.worker.runner
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-butler}:${POSTGRES_PASSWORD:-butler}@db:5432/${POSTGRES_DB:-butler}
+    depends_on:
+      db:
+        condition: service_healthy
+
+  feishu:
+    # 飞书长连接独立服务；SDK 事件循环是模块级全局，只能单实例部署
+    build: .
+    command: uv run --no-dev python -m app.feishu_main
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-butler}:${POSTGRES_PASSWORD:-butler}@db:5432/${POSTGRES_DB:-butler}
+    depends_on:
+      db:
+        condition: service_healthy
+
+  adminer:
+    # 数据库网页看板（本机访问）：http://localhost:8080
+    image: adminer:4
+    environment:
+      ADMINER_DEFAULT_SERVER: db
+      ADMINER_DESIGN: pepa-linha
+    ports:
+      # 绑定全网卡：老版 WSL2 不转发仅绑定 127.0.0.1 的端口，Windows 侧浏览器无法访问
+      - "8080:8080"
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  pgdata:

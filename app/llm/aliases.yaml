@@ -1,0 +1,42 @@
+# 档位别名 -> provider / model / params / fallback
+# 业务代码只允许引用别名，禁止出现模型名字符串。
+# 走方舟 Coding Plan 专用端点（见 .env 的 LLM_BASE_URL），model 用套餐 Model Name：
+#  - ark-code-latest：实际模型在方舟控制台「开通管理」选择/切换（3-5 分钟生效，支持 Auto 模式）
+#  - 也可指定具体套餐模型名，如 deepseek-v4.1-flash / deepseek-v4.1-flash-economy / doubao-seed-2.1-pro / glm-5.3-flash / kimi-k3.1-pro 等
+friday_fast:
+  provider: openai_compat
+  model: ark-code-latest
+  params:
+    max_tokens: 2048
+    temperature: 0.3
+    timeout: 30
+memory_extract:
+  provider: openai_compat
+  model: ark-code-latest
+  params:
+    max_tokens: 1024
+    temperature: 0.0
+    timeout: 30
+mini_plan:
+  provider: openai_compat
+  model: ark-code-latest
+  params:
+    max_tokens: 2048
+    temperature: 0.2
+    timeout: 60
+jarvis_deep:
+  provider: openai_compat
+  model: doubao-seed-2.1-pro
+  params:
+    max_tokens: 4096
+    temperature: 0.4
+    timeout: 120
+vision_extract:
+  provider: openai_compat
+  model: doubao-seed-2.1-pro
+  params:
+    max_tokens: 1024
+    temperature: 0.0
+    timeout: 60
+
+

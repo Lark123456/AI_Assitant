@@ -1,0 +1,101 @@
+# 时间表达评测集（手动运行、真实模型，不进 CI）
+# 运行方式：先 make up && make migrate，然后 uv run python scripts/run_time_evals.py
+# 语义：
+#   expected_fire_at —— 期望的提醒触发时刻（ISO 8601，+08:00）
+#   expect_reminder: false —— 该话语不应创建任何提醒（记笔记、只建任务、缺时间、
+#     过去时间、阶段 1 不支持的重复规则等）
+meta:
+  now: "2026-11-03T10:00:00+08:00"  # 固定当前时间（周二）与时区
+  tz: "Asia/Shanghai"
+
+cases:
+  - id: t01
+    utterance: "明天 9 点提醒我交报告"
+    expected_fire_at: "2026-11-04T09:00:00+08:00"
+  - id: t02
+    utterance: "明天早上 8 点叫我起床"
+    expected_fire_at: "2026-11-04T08:00:00+08:00"
+  - id: t03
+    utterance: "今晚 10 点提醒我吃药"
+    expected_fire_at: "2026-11-03T22:00:00+08:00"
+  - id: t04
+    utterance: "今天下午 3 点提醒我开会"
+    expected_fire_at: "2026-11-03T15:00:00+08:00"
+  - id: t05
+    utterance: "半小时后提醒我关火"
+    expected_fire_at: "2026-11-03T10:30:00+08:00"
+  - id: t06
+    utterance: "45 分钟后提醒我取快递"
+    expected_fire_at: "2026-11-03T10:45:00+08:00"
+  - id: t07
+    utterance: "两个小时后提醒我休息"
+    expected_fire_at: "2026-11-03T12:00:00+08:00"
+  - id: t08
+    utterance: "两个半小时后提醒我复盘"
+    expected_fire_at: "2026-11-03T12:30:00+08:00"
+  - id: t09
+    utterance: "10 分钟后提醒我喝水"
+    expected_fire_at: "2026-11-03T10:10:00+08:00"
+  - id: t10
+    utterance: "后天上午 10 点提醒我体检"
+    expected_fire_at: "2026-11-05T10:00:00+08:00"
+  - id: t11
+    utterance: "11 月 10 日上午 10 点提醒我还书"
+    expected_fire_at: "2026-11-10T10:00:00+08:00"
+  - id: t12
+    utterance: "11 月 10 日下午 3 点半提醒我还书"
+    expected_fire_at: "2026-11-10T15:30:00+08:00"
+  - id: t13
+    utterance: "下周三上午 9 点提醒我周会"
+    expected_fire_at: "2026-11-11T09:00:00+08:00"
+  - id: t14
+    utterance: "下周一早上 9 点提醒我站会"
+    expected_fire_at: "2026-11-09T09:00:00+08:00"
+  - id: t15
+    utterance: "凌晨 1 点提醒我睡觉"
+    expected_fire_at: "2026-11-04T01:00:00+08:00"
+  - id: t16
+    utterance: "中午 12 点提醒我吃饭"
+    expected_fire_at: "2026-11-03T12:00:00+08:00"
+  - id: t17
+    utterance: "傍晚 6 点提醒我健身"
+    expected_fire_at: "2026-11-03T18:00:00+08:00"
+  - id: t18
+    utterance: "晚上 11 点半提醒我躺下"
+    expected_fire_at: "2026-11-03T23:30:00+08:00"
+  - id: t19
+    utterance: "明天 14:00 提醒我参加评审"
+    expected_fire_at: "2026-11-04T14:00:00+08:00"
+  - id: t20
+    utterance: "2026-11-05T09:30:00+08:00 提醒我面试"
+    expected_fire_at: "2026-11-05T09:30:00+08:00"
+  - id: t21
+    utterance: "2026-11-04 20:00 提醒我给妈妈打电话"
+    expected_fire_at: "2026-11-04T20:00:00+08:00"
+  - id: t22
+    utterance: "12 月 1 日下午 2 点提醒我缴费"
+    expected_fire_at: "2026-12-01T14:00:00+08:00"
+  - id: t23
+    utterance: "这周六下午 4 点提醒我打球"
+    expected_fire_at: "2026-11-07T16:00:00+08:00"
+  - id: t24
+    utterance: "周日晚上 8 点提醒我准备周会"
+    expected_fire_at: "2026-11-08T20:00:00+08:00"
+  - id: t25
+    utterance: "帮我记一下：周三要交周报"
+    expect_reminder: false
+  - id: t26
+    utterance: "创建任务：写季度总结"
+    expect_reminder: false
+  - id: t27
+    utterance: "提醒我交报告"
+    expect_reminder: false
+  - id: t28
+    utterance: "每天 9 点提醒我喝水"
+    expect_reminder: false
+  - id: t29
+    utterance: "今天早上 8 点提醒我打卡"
+    expect_reminder: false
+  - id: t30
+    utterance: "现在提醒我喝水"
+    expect_reminder: false
