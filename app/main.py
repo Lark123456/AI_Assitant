@@ -2,7 +2,12 @@
 
 阶段 1 修订：api 不再启动飞书长连接——长连接移入独立 feishu 服务
 （app/feishu_main.py，compose 单实例）。
+阶段 1 修订 2：Console 路由由 ENABLE_CONSOLE 控制（默认关闭）；
+启动时补处理上次未完成的入站事件（inbound_processing.status=processing）。
 """
+
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
@@ -13,12 +18,14 @@ from app.api.routes.console import router as console_router
 from app.api.routes.health import router as health_router
 from app.core.clock import Clock
 from app.core.config import get_settings
-from app.core.logging import setup_logging
+from app.core.logging import get_logger, setup_logging
 from app.db.base import make_engine, make_sessionmaker
 from app.engine.pipeline import InboundPipeline
 from app.llm.gateway import LLMGateway
 from app.llm.providers.base import BaseProvider
 from app.llm.providers.openai_compat import OpenAICompatProvider
+
+logger = get_logger(__name__)
 
 
 def create_app() -> FastAPI:
@@ -30,7 +37,8 @@ def create_app() -> FastAPI:
     sessionmaker = make_sessionmaker(engine)
 
     providers: dict[str, BaseProvider] = {
-        "openai_compat": OpenAICompatProvider(settings.llm_base_url, settings.llm_api_key)
+        "openai_compat": OpenAICompatProvider(settings.llm_base_url, settings.llm_api_key),
+        "openai_compat_agent": OpenAICompatProvider(settings.llm_agent_base_url, settings.llm_agent_api_key),
     }
     gateway = LLMGateway(
         aliases_path=settings.aliases_path,
@@ -52,10 +60,18 @@ def create_app() -> FastAPI:
         adapters=adapters,
     )
 
-    app = FastAPI()
+    @asynccontextmanager
+    async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+        recovered = await pipeline.recover_unfinished()
+        if recovered:
+            logger.info("startup: recovered %d unfinished inbound events", recovered)
+        yield
+
+    app = FastAPI(lifespan=lifespan)
     app.state.pipeline = pipeline
     app.state.adapters = adapters
-    app.include_router(console_router)
+    if settings.enable_console:
+        app.include_router(console_router)
     app.include_router(health_router)
     return app
 

@@ -155,13 +155,14 @@ class LLMGateway:
         result: LLMResult | None,
         error: str | None,
     ) -> None:
-        """每次模型调用（含失败）都写入 llm_call 表。"""
+        """每次模型调用（含失败）都写入 llm_call 表；model_id 优先记模型实际返回的 id。"""
         row = LLMCall(
             trace_id=trace_id,
             user_id=user_id,
             alias=alias,
             provider=provider.name,
-            model_id=cfg.model,
+            # 实际模型 id 以响应为准（控制台切换模型时与配置不同）；缺失时回退配置
+            model_id=(result.model_id or cfg.model) if result is not None else cfg.model,
             params=cfg.params,
             request={"messages": messages, "tools": tools},
             response=None

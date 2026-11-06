@@ -4,11 +4,14 @@ import datetime as dt
 import uuid
 
 from sqlalchemy import (
+    Boolean,
     CheckConstraint,
     DateTime,
+    Float,
     ForeignKey,
     Integer,
     Text,
+    Time,
     Uuid,
 )
 from sqlalchemy.dialects.postgresql import JSONB
@@ -34,6 +37,14 @@ class NudgeCandidate(Base):
     dedupe_key: Mapped[str | None] = mapped_column(Text, index=True)
     precondition: Mapped[dict | None] = mapped_column(JSONB)
     source_trigger_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("trigger_instance.id"))
+    # 阶段 2：用户明确设置的承诺类；holdout/propensity 本阶段只留字段
+    explicit: Mapped[bool] = mapped_column(Boolean, default=False)
+    holdout_group: Mapped[str | None] = mapped_column(Text)
+    propensity: Mapped[float | None] = mapped_column(Float)
+    # 建议被并入简报后指向简报候选
+    merged_into_candidate_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("nudge_candidate.id")
+    )
 
 
 class NudgeDecision(Base):
@@ -73,3 +84,7 @@ class NotifPrefs(Base):
     quiet_hours: Mapped[dict | None] = mapped_column(JSONB)
     class_enabled: Mapped[dict | None] = mapped_column(JSONB)
     snooze_until: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))
+    # 阶段 2：简报时间（用户本地时间）与开关
+    morning_brief_time: Mapped[dt.time] = mapped_column(Time, default=dt.time(8, 30))
+    evening_brief_time: Mapped[dt.time] = mapped_column(Time, default=dt.time(21, 0))
+    briefs_enabled: Mapped[bool] = mapped_column(Boolean, default=True)

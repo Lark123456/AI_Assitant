@@ -1,4 +1,4 @@
-"""测试公共设施：DB（不可用则跳过集成测试，REQUIRE_DB=1 时改为失败）、FakeClock、假 LLM provider、管道工厂。"""
+"""测试公共设施：独立测试库（自动创建、与运行中的服务隔离）、FakeClock、假 LLM provider、管道工厂。"""
 
 import asyncio
 import datetime as dt
@@ -6,11 +6,15 @@ import os
 from collections.abc import Callable
 from pathlib import Path
 
-# 必须在导入 app 模块前设置，保证 get_settings 与 Alembic 用同一地址
+# 必须在导入 app 模块前设置：测试一律使用独立的 butler_test 库。
+# 若与 docker compose 中运行中的 worker/api 共用 butler 库，worker 会抢走测试创建的
+# trigger 并按真实时钟判定过期，导致「missed」等不可预测结果。
 # ruff: noqa: E402
-TEST_DATABASE_URL = os.environ.setdefault(
-    "DATABASE_URL", "postgresql+psycopg://butler:butler@localhost:5432/butler"
+TEST_DATABASE_URL = os.environ.get(
+    "TEST_DATABASE_URL",
+    "postgresql+psycopg://butler:butler@localhost:5432/butler_test",
 )
+os.environ["DATABASE_URL"] = TEST_DATABASE_URL
 
 import pytest
 from alembic import command
@@ -30,8 +34,8 @@ from app.llm.schemas import LLMResult
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 TEST_ALIASES = Path(__file__).parent / "fixtures" / "aliases_test.yaml"
 ALL_TABLES = (
-    "memory_decision_log, memory_source, memory, llm_call, notif_prefs, delivery, "
-    "nudge_decision, nudge_candidate, trigger_instance, planned_block, work_item, "
+    "inbound_processing, memory_decision_log, memory_source, memory, llm_call, notif_prefs, "
+    "delivery, nudge_decision, nudge_candidate, trigger_instance, planned_block, work_item, "
     "event_log, channel_identity, \"user\""
 )
 
@@ -42,9 +46,40 @@ def _run_migrations() -> None:
     command.upgrade(cfg, "head")
 
 
+def _ensure_database() -> bool:
+    """连维护库创建测试库（已存在则跳过）；维护库不可达时返回 False。"""
+
+    async def _run() -> None:
+        from sqlalchemy.engine import make_url
+        from sqlalchemy.ext.asyncio import create_async_engine
+
+        url = make_url(TEST_DATABASE_URL)
+        name = url.database or ""
+        admin_url = url.set(database="postgres")
+        engine = create_async_engine(admin_url, isolation_level="AUTOCOMMIT")
+        try:
+            async with engine.connect() as conn:
+                exists = (
+                    await conn.execute(
+                        text("SELECT 1 FROM pg_database WHERE datname = :name"),
+                        {"name": name},
+                    )
+                ).first()
+                if exists is None:
+                    await conn.execute(text(f'CREATE DATABASE "{name}"'))
+        finally:
+            await engine.dispose()
+
+    try:
+        asyncio.run(_run())
+        return True
+    except Exception:
+        return False
+
+
 @pytest.fixture(scope="session")
 def db_ready() -> bool:
-    """Postgres 可达则跑迁移；不可用时：REQUIRE_DB=1 失败，否则跳过集成测试。"""
+    """准备独立测试库并跑迁移；不可用时：REQUIRE_DB=1 失败，否则跳过集成测试。"""
 
     async def _check() -> bool:
         from sqlalchemy.ext.asyncio import create_async_engine
@@ -59,7 +94,8 @@ def db_ready() -> bool:
         finally:
             await engine.dispose()
 
-    if not asyncio.run(_check()):
+    ready = _ensure_database() and asyncio.run(_check())
+    if not ready:
         if os.environ.get("REQUIRE_DB") == "1":
             pytest.fail("REQUIRE_DB=1 但 Postgres 不可用：先 make up 再跑集成测试")
         pytest.skip("Postgres 不可用：先 make up 再跑集成测试")

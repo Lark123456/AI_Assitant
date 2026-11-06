@@ -22,7 +22,7 @@ async def test_concurrent_claims_are_disjoint(db, fake_clock):
     now = fake_clock.now()
     async with db() as session:
         for i in range(5):
-            await create_trigger(
+            _, created = await create_trigger(
                 session,
                 user_id=user_id,
                 kind="reminder",
@@ -32,6 +32,7 @@ async def test_concurrent_claims_are_disjoint(db, fake_clock):
                 payload={"note": f"n{i}"},
                 clock=fake_clock,
             )
+            assert created
         await session.commit()
 
     async def claim_all(limit: int) -> list:
@@ -50,15 +51,15 @@ async def test_claim_only_takes_due_and_pending(db, fake_clock):
     user_id = await _make_user(db, fake_clock)
     now = fake_clock.now()
     async with db() as session:
-        due = await create_trigger(
+        due, _ = await create_trigger(
             session, user_id=user_id, kind="reminder", key="due-1", fire_at=now,
             tz="Asia/Shanghai", payload={}, clock=fake_clock,
         )
-        future = await create_trigger(
+        future, _ = await create_trigger(
             session, user_id=user_id, kind="reminder", key="future-1",
             fire_at=now.replace(hour=23), tz="Asia/Shanghai", payload={}, clock=fake_clock,
         )
-        fired = await create_trigger(
+        fired, _ = await create_trigger(
             session, user_id=user_id, kind="reminder", key="fired-1", fire_at=now,
             tz="Asia/Shanghai", payload={}, clock=fake_clock,
         )
@@ -80,12 +81,12 @@ async def test_claim_skips_backoff_wait_and_exhausted(db, fake_clock):
     user_id = await _make_user(db, fake_clock)
     now = fake_clock.now()
     async with db() as session:
-        waiting = await create_trigger(
+        waiting, _ = await create_trigger(
             session, user_id=user_id, kind="reminder", key="wait-1", fire_at=now,
             tz="Asia/Shanghai", payload={}, clock=fake_clock,
         )
         waiting.next_attempt_at = now.replace(hour=23)
-        exhausted = await create_trigger(
+        exhausted, _ = await create_trigger(
             session, user_id=user_id, kind="reminder", key="ex-1", fire_at=now,
             tz="Asia/Shanghai", payload={}, clock=fake_clock,
         )

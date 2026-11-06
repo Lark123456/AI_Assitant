@@ -6,6 +6,7 @@ import uuid
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.agents.friday.history import build_history
 from app.agents.friday.prompts import build_system_prompt
 from app.core.clock import Clock
 from app.core.config import Settings
@@ -16,7 +17,7 @@ from app.llm.schemas import LLMResult
 from app.tools.base import ToolContext
 from app.tools.registry import execute_tool, tool_schemas
 
-MAX_STEPS = 3
+MAX_STEPS = 4
 FRIDAY_ALIAS = "friday_fast"
 BUDGET_EXCEEDED_REPLY = "今天的额度用完了，我们明天再聊吧。"
 
@@ -53,8 +54,15 @@ class FridayAgent:
         )
         messages: list[dict] = [
             {"role": "system", "content": build_system_prompt(clock, user.timezone)},
-            {"role": "user", "content": text},
         ]
+        history = await build_history(
+            session,
+            user_id=user.id,
+            exclude_event_id=source_event_id,
+            clock=clock,
+        )
+        messages.extend(history)
+        messages.append({"role": "user", "content": text})
         last_content = ""
         call_seq = 0  # 工具调用序号：跨步骤递增，用于派生幂等键
         for _step in range(MAX_STEPS):

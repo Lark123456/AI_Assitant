@@ -42,3 +42,5 @@ class TriggerInstance(Base):
     next_attempt_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))
     last_error: Mapped[str | None] = mapped_column(Text)
     claimed_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))
+    # 阶段 2：仲裁延后计数（defer 不消耗 attempts，最多 3 次）
+    defer_count: Mapped[int] = mapped_column(Integer, default=0)

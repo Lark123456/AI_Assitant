@@ -29,6 +29,7 @@ from app.adapters.identity import make_identity_resolver
 from app.core.clock import Clock
 from app.core.config import get_settings
 from app.core.logging import get_logger, setup_logging
+from app.core.tasks import spawn
 from app.db.base import make_engine, make_sessionmaker
 from app.engine.pipeline import InboundPipeline
 from app.llm.gateway import LLMGateway
@@ -38,15 +39,18 @@ logger = get_logger(__name__)
 
 
 async def _dispatch(pipeline: InboundPipeline, event: InboundEvent) -> None:
-    """回调协程：ingest（3 秒内落库）后把 process 放入后台。"""
+    """回调协程：ingest（3 秒内落库）后把 process 放入后台（引用由 spawn 持有）。"""
     ingested = await pipeline.ingest(event)
     if ingested is None:
         return
     if ingested.created:
-        asyncio.get_running_loop().create_task(pipeline.process(ingested))
+        spawn(pipeline.process(ingested))
 
 
 async def _run(pipeline: InboundPipeline, feishu: FeishuAdapter) -> None:
+    recovered = await pipeline.recover_unfinished()
+    if recovered:
+        logger.info("startup: recovered %d unfinished inbound events", recovered)
     await feishu.start(lambda event: _dispatch(pipeline, event))
 
 
@@ -60,7 +64,12 @@ def main() -> None:
     sessionmaker = make_sessionmaker(engine)
     gateway = LLMGateway(
         aliases_path=settings.aliases_path,
-        providers={"openai_compat": OpenAICompatProvider(settings.llm_base_url, settings.llm_api_key)},
+        providers={
+            "openai_compat": OpenAICompatProvider(settings.llm_base_url, settings.llm_api_key),
+            "openai_compat_agent": OpenAICompatProvider(
+                settings.llm_agent_base_url, settings.llm_agent_api_key
+            ),
+        },
         sessionmaker=sessionmaker,
         clock=clock,
         daily_limit=settings.llm_daily_limit,

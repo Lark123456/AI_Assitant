@@ -2,8 +2,9 @@ services:
   db:
     image: pgvector/pgvector:pg16
     environment:
+      # 密码无默认值：未在 .env 设置 POSTGRES_PASSWORD 时 compose 直接报错
       POSTGRES_USER: ${POSTGRES_USER:-butler}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-butler}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD 未设置（请写入 .env）}
       POSTGRES_DB: ${POSTGRES_DB:-butler}
     ports:
       # 仅绑定本机回环，不暴露到局域网
@@ -15,6 +16,7 @@ services:
       interval: 2s
       timeout: 2s
       retries: 15
+    restart: unless-stopped
 
   api:
     build: .
@@ -24,12 +26,14 @@ services:
         required: false
     environment:
       # compose 网络内用 db 主机名覆盖宿主机地址
-      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-butler}:${POSTGRES_PASSWORD:-butler}@db:5432/${POSTGRES_DB:-butler}
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-butler}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD 未设置（请写入 .env）}@db:5432/${POSTGRES_DB:-butler}
     ports:
-      - "8000:8000"
+      # 绑回环：WSL(wslhost) 只转发绑 127.0.0.1 的端口到 Windows localhost，且不暴露局域网
+      - "127.0.0.1:8000:8000"
     depends_on:
       db:
         condition: service_healthy
+    restart: unless-stopped
 
   worker:
     build: .
@@ -38,10 +42,11 @@ services:
       - path: .env
         required: false
     environment:
-      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-butler}:${POSTGRES_PASSWORD:-butler}@db:5432/${POSTGRES_DB:-butler}
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-butler}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD 未设置（请写入 .env）}@db:5432/${POSTGRES_DB:-butler}
     depends_on:
       db:
         condition: service_healthy
+    restart: unless-stopped
 
   feishu:
     # 飞书长连接独立服务；SDK 事件循环是模块级全局，只能单实例部署
@@ -51,10 +56,11 @@ services:
       - path: .env
         required: false
     environment:
-      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-butler}:${POSTGRES_PASSWORD:-butler}@db:5432/${POSTGRES_DB:-butler}
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-butler}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD 未设置（请写入 .env）}@db:5432/${POSTGRES_DB:-butler}
     depends_on:
       db:
         condition: service_healthy
+    restart: unless-stopped
 
   adminer:
     # 数据库网页看板（本机访问）：http://localhost:8080
@@ -63,11 +69,12 @@ services:
       ADMINER_DEFAULT_SERVER: db
       ADMINER_DESIGN: pepa-linha
     ports:
-      # 绑定全网卡：老版 WSL2 不转发仅绑定 127.0.0.1 的端口，Windows 侧浏览器无法访问
-      - "8080:8080"
+      # 0.0.0.0 让 Windows 侧能通过 WSL IP 访问；WSL 内部 NAT 实际只有本机可达
+      - "0.0.0.0:8080:8080"
     depends_on:
       db:
         condition: service_healthy
+    restart: unless-stopped
 
 volumes:
   pgdata:

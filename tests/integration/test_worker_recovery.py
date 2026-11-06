@@ -10,8 +10,8 @@ from sqlalchemy import select
 
 from app.adapters.console_adapter import ConsoleAdapter
 from app.adapters.identity import make_identity_resolver
+from app.core.config import Settings
 from app.db.models import ChannelIdentity, EventLog, TriggerInstance, User
-from app.engine.gate import PassthroughGate
 from app.engine.triggers import claim_due_triggers, create_trigger, reclaim_expired_leases
 from app.worker.runner import process_claimed_trigger
 
@@ -33,12 +33,17 @@ async def _make_user(db, clock) -> uuid.UUID:
 
 
 async def _run_due(db, fake_clock, adapters):
+
     async with db() as session:
         claimed = await claim_due_triggers(session, now=fake_clock.now(), limit=10)
         await session.commit()
     for trigger in claimed:
         await process_claimed_trigger(
-            db, trigger_id=trigger.id, adapters=adapters, clock=fake_clock, gate=PassthroughGate()
+            db,
+            trigger_id=trigger.id,
+            adapters=adapters,
+            clock=fake_clock,
+            settings=Settings(_env_file=None),
         )
     return claimed
 
@@ -49,14 +54,14 @@ async def test_downtime_fires_unexpired_and_misses_expired(db, fake_clock):
     now = fake_clock.now()
 
     async with db() as session:
-        fresh = await create_trigger(
+        fresh, _ = await create_trigger(
             session, user_id=user_id, kind="reminder", key="r-fresh",
             fire_at=now - dt.timedelta(minutes=5),
             tz="Asia/Shanghai", payload={"note": "补发我", "trace_id": "tr-recover"},
             expires_at=now + dt.timedelta(minutes=30),
             clock=fake_clock,
         )
-        stale = await create_trigger(
+        stale, _ = await create_trigger(
             session, user_id=user_id, kind="reminder", key="r-stale",
             fire_at=now - dt.timedelta(hours=3),
             tz="Asia/Shanghai", payload={"note": "错过我", "trace_id": "tr-recover"},
@@ -81,7 +86,9 @@ async def test_downtime_fires_unexpired_and_misses_expired(db, fake_clock):
     # 补发的内容真的送到了 Console
     nudges = [m for m in console.messages_for("u1") if m["type"] == "nudge"]
     assert len(nudges) == 1
-    assert nudges[0]["body"]["text"] == "补发我"
+    # 阶段 2：迟到补发带迟到标注
+    assert nudges[0]["body"]["text"].startswith("补发我")
+    assert "迟到" in nudges[0]["body"]["text"]
 
     # missed 与补发都写入了 event_log
     async with db() as session:
@@ -102,7 +109,7 @@ async def test_lease_reclaim_repends_stale_claimed(db, fake_clock):
     now = fake_clock.now()
 
     async with db() as session:
-        trigger = await create_trigger(
+        trigger, _ = await create_trigger(
             session, user_id=user_id, kind="reminder", key="r-lease",
             fire_at=now, tz="Asia/Shanghai", payload={"note": "租约"},
             clock=fake_clock,
@@ -148,7 +155,7 @@ async def test_lease_reclaim_marks_failed_when_attempts_exhausted(db, fake_clock
     now = fake_clock.now()
 
     async with db() as session:
-        trigger = await create_trigger(
+        trigger, _ = await create_trigger(
             session, user_id=user_id, kind="reminder", key="r-exhaust",
             fire_at=now, tz="Asia/Shanghai", payload={"note": "耗尽"},
             clock=fake_clock,

@@ -7,6 +7,7 @@
 """
 
 import asyncio
+import hashlib
 import json
 import uuid
 from concurrent.futures import TimeoutError as FuturesTimeoutError
@@ -22,6 +23,18 @@ from app.adapters.base import (
 from app.core.logging import get_logger
 
 logger = get_logger(__name__)
+
+# 飞书消息体 uuid 字段上限 64 字符
+_FEISHU_UUID_MAX = 64
+
+
+def feishu_send_uuid(collapse_key: str | None) -> str | None:
+    """发送幂等 uuid：取 collapse_key，超长取其 sha256；无 collapse_key 则不传。"""
+    if not collapse_key:
+        return None
+    if len(collapse_key) <= _FEISHU_UUID_MAX:
+        return collapse_key
+    return hashlib.sha256(collapse_key.encode()).hexdigest()
 
 
 class FeishuAdapter(ChannelAdapter):
@@ -130,12 +143,17 @@ class FeishuAdapter(ChannelAdapter):
         )
 
     async def send(self, intent: OutboundIntent) -> DeliveryResult:
-        """发送文本消息（confirm_card 等类型阶段 1 一律降级为文本）。"""
+        """发送文本消息（confirm_card 等类型阶段 1 一律降级为文本）。
+
+        传 uuid（collapse_key 或其哈希）作为发送幂等键：trigger 重试投递时
+        飞书服务端按 uuid 去重，不会重复下发同一条提醒。
+        """
         self._ensure_clients()
         open_id = await self.external_id_of(intent.user_id)
         if open_id is None:
             return DeliveryResult(ok=False, error="feishu: no open_id for user")
         text = intent.body.get("text", "")
+        send_uuid = feishu_send_uuid(intent.collapse_key)
         request = (
             self._CreateMessageRequest.builder()
             .receive_id_type("open_id")
@@ -144,6 +162,7 @@ class FeishuAdapter(ChannelAdapter):
                 .receive_id(open_id)
                 .msg_type("text")
                 .content(json.dumps({"text": text}, ensure_ascii=False))
+                .uuid(send_uuid)
                 .build()
             )
             .build()

@@ -92,7 +92,12 @@ async def main_async(args: argparse.Namespace) -> int:
     sessionmaker = make_sessionmaker(engine)
     gateway = LLMGateway(
         aliases_path=settings.aliases_path,
-        providers={"openai_compat": OpenAICompatProvider(settings.llm_base_url, settings.llm_api_key)},
+        providers={
+            "openai_compat": OpenAICompatProvider(settings.llm_base_url, settings.llm_api_key),
+            "openai_compat_agent": OpenAICompatProvider(
+                settings.llm_agent_base_url, settings.llm_agent_api_key
+            ),
+        },
         sessionmaker=sessionmaker,
         clock=FakeClock(dt.datetime.fromisoformat(meta["now"])),
         daily_limit=settings.llm_daily_limit,

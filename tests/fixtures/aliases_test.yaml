@@ -4,3 +4,9 @@ friday_fast:
   params:
     max_tokens: 128
     timeout: 5
+brief_compose:
+  provider: fake
+  model: fake-model
+  params:
+    max_tokens: 32
+    timeout: 3

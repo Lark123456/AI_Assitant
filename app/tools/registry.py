@@ -13,14 +13,35 @@ from pydantic import BaseModel, ValidationError
 
 from app.engine.events import append_event, find_event_by_idempotency_key
 from app.tools.base import ToolContext, ToolDef, ToolResult, tool_schema
+from app.tools.blocks import (
+    LIST_SCHEDULE,
+    RESCHEDULE_BLOCK,
+    SCHEDULE_BLOCK,
+    UPDATE_BLOCK_STATUS,
+)
 from app.tools.notes import CAPTURE_NOTE
-from app.tools.reminders import SET_REMINDER
+from app.tools.prefs import SET_NOTIF_PREFS
+from app.tools.reminders import CANCEL_REMINDER, LIST_REMINDERS, SET_REMINDER
 from app.tools.tasks import COMPLETE_TASK, CREATE_TASK, LIST_TASKS
 from app.tools.timezone import SET_TIMEZONE
 
 TOOLS: dict[str, ToolDef] = {
     t.name: t
-    for t in (CREATE_TASK, LIST_TASKS, COMPLETE_TASK, SET_REMINDER, CAPTURE_NOTE, SET_TIMEZONE)
+    for t in (
+        CREATE_TASK,
+        LIST_TASKS,
+        COMPLETE_TASK,
+        SET_REMINDER,
+        LIST_REMINDERS,
+        CANCEL_REMINDER,
+        CAPTURE_NOTE,
+        SET_TIMEZONE,
+        SCHEDULE_BLOCK,
+        LIST_SCHEDULE,
+        UPDATE_BLOCK_STATUS,
+        RESCHEDULE_BLOCK,
+        SET_NOTIF_PREFS,
+    )
 }
 
 
@@ -73,16 +94,23 @@ async def execute_tool(ctx: ToolContext, name: str, args: dict, *, call_index: i
 async def _run_and_log(
     ctx: ToolContext, tool: ToolDef, args: dict, result_key: str | None, parsed: BaseModel
 ) -> ToolResult:
-    """执行并把结果（含错误）写入 tool_result 事件。"""
+    """在 savepoint 中执行并写结果事件；工具异常回滚 savepoint，不污染外层事务。"""
     try:
-        result = await tool.run(ctx, parsed.model_dump())
-    except Exception as exc:  # 工具异常转为 error 结果，仍写事件留痕
+        async with ctx.session.begin_nested():
+            result = await tool.run(ctx, parsed.model_dump())
+            if result_key is not None:
+                await _append_tool_event(
+                    ctx, type="tool_result", idempotency_key=result_key, payload=result.model_dump()
+                )
+            return result
+    except Exception as exc:
+        # savepoint 已回滚（业务写入与结果事件一并撤销）；错误结果另写，仍留痕
         result = ToolResult(status="error", message=f"{type(exc).__name__}: {exc}")
-    if result_key is not None:
-        await _append_tool_event(
-            ctx, type="tool_result", idempotency_key=result_key, payload=result.model_dump()
-        )
-    return result
+        if result_key is not None:
+            await _append_tool_event(
+                ctx, type="tool_result", idempotency_key=result_key, payload=result.model_dump()
+            )
+        return result
 
 
 def _result_from_payload(payload: dict) -> ToolResult:

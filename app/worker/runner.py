@@ -1,13 +1,13 @@
-"""Worker：领取到期 trigger → 校验前提 → 仲裁 → 投递。
+"""Worker：物化 → 领取到期 trigger → 前提校验 → 候选 → 仲裁 → 投递。
 
-阶段 1 修订：
-- 领取即提交（attempts / claimed_at 持久化），崩溃后由租约回收兜底。
-- 每轮回收 claimed_at 超过租约的记录：有余量回 pending，耗尽置 failed。
-- 处理异常按指数退避（30s × 2^(n-1)）重试，上限 5 次，耗尽置 failed 并写 event_log。
-- missed 只用于停机错过（到期处理时已过 expires_at）。
+阶段 2：
+- 每轮按 interval 运行物化器（brief 触发、规则候选）。
+- trigger 处理走 handlers（kind → 候选）与 nudge（仲裁 → 发送/延后/合并/丢弃）。
+- 唯一发送出口在 nudge.send；defer 不消耗 attempts。
 """
 
 import asyncio
+import datetime as dt
 import uuid
 
 from sqlalchemy import select
@@ -18,13 +18,19 @@ from app.adapters.console_adapter import ConsoleAdapter
 from app.adapters.feishu_adapter import FeishuAdapter
 from app.adapters.identity import make_identity_resolver
 from app.core.clock import Clock
-from app.core.config import get_settings
+from app.core.config import Settings, get_settings
+from app.core.ids import new_trace_id
 from app.core.logging import get_logger, setup_logging
 from app.db.base import make_engine, make_sessionmaker
-from app.db.models import ChannelIdentity, TriggerInstance
-from app.engine.delivery import deliver_trigger_nudge
+from app.db.models import ChannelIdentity, TriggerInstance, User
 from app.engine.events import append_event
-from app.engine.gate import PassthroughGate
+from app.engine.handlers import build_candidates
+from app.engine.materializer import get_or_create_prefs, run_materializer
+from app.engine.nudge import (
+    arbitrate_pending_suggestions,
+    get_or_create_candidate,
+    process_candidate,
+)
 from app.engine.triggers import (
     check_precondition,
     claim_due_triggers,
@@ -32,10 +38,14 @@ from app.engine.triggers import (
     record_trigger_failure,
     reset_stale_claimed,
 )
+from app.llm.gateway import LLMGateway
+from app.llm.providers.base import BaseProvider
+from app.llm.providers.openai_compat import OpenAICompatProvider
 
 logger = get_logger(__name__)
 
 PREFERRED_CHANNELS = ("feishu", "console")  # 投递渠道优先级
+LATE_DROP_GRACE_MINUTES = 5
 
 
 async def resolve_channel(
@@ -63,11 +73,14 @@ async def process_trigger(
     trigger: TriggerInstance,
     adapters: dict[str, ChannelAdapter],
     clock: Clock,
-    gate: PassthroughGate,
+    settings: Settings,
+    gateway: LLMGateway | None,
 ) -> None:
-    """单条 trigger 的处理：过期→missed；前提失败→dropped；否则投递→fired。"""
-    trace_id: str = trigger.payload.get("trace_id", "")
+    """单条 trigger：过期/前提/渠道校验后产出候选并交给仲裁器。"""
+    trace_id: str = trigger.payload.get("trace_id", "") or new_trace_id()
     now = clock.now()
+
+    # 停机补偿：超过 expires_at 即 missed；policy=drop 时提醒超过宽限即 dropped
     if trigger.expires_at is not None and trigger.expires_at < now:
         trigger.status = "missed"
         await append_event(
@@ -79,13 +92,33 @@ async def process_trigger(
             payload={"trigger_id": str(trigger.id), "status": "missed", "kind": trigger.kind},
             trace_id=trace_id,
             clock=clock,
+            idempotency_key=f"trigger-missed:{trigger.id}",
         )
-        logger.info(
-            "trigger missed (expired): id=%s kind=%s fire_at=%s",
-            trigger.id,
-            trigger.kind,
-            trigger.fire_at.isoformat(),
+        logger.info("trigger missed (expired): id=%s kind=%s", trigger.id, trigger.kind)
+        return
+    if (
+        settings.reminder_late_policy == "drop"
+        and trigger.kind == "reminder"
+        and now > trigger.fire_at + dt.timedelta(minutes=LATE_DROP_GRACE_MINUTES)
+    ):
+        trigger.status = "dropped"
+        await append_event(
+            session,
+            user_id=trigger.user_id,
+            channel="system",
+            direction="system",
+            type="trigger",
+            payload={
+                "trigger_id": str(trigger.id),
+                "status": "dropped",
+                "kind": trigger.kind,
+                "reason": "late_policy_drop",
+            },
+            trace_id=trace_id,
+            clock=clock,
+            idempotency_key=f"trigger-late-dropped:{trigger.id}",
         )
+        logger.info("trigger dropped (late policy): id=%s kind=%s", trigger.id, trigger.kind)
         return
 
     ok, reason = await check_precondition(session, trigger)
@@ -105,6 +138,7 @@ async def process_trigger(
             },
             trace_id=trace_id,
             clock=clock,
+            idempotency_key=f"trigger-dropped:{trigger.id}",
         )
         logger.info("trigger dropped (precondition): id=%s reason=%s", trigger.id, reason)
         return
@@ -114,7 +148,59 @@ async def process_trigger(
         trigger.status = "dropped"
         logger.error("no channel to deliver trigger %s for user %s", trigger.id, trigger.user_id)
         return
-    await deliver_trigger_nudge(session, trigger=trigger, adapter=adapter, clock=clock, gate=gate)
+
+    user = await session.get(User, trigger.user_id)
+    if user is None:
+        trigger.status = "failed"
+        trigger.last_error = "user not found"
+        return
+    prefs = await get_or_create_prefs(session, user.id, clock)
+
+    result = build_candidates(trigger)
+    if result.signal is not None:
+        await append_event(
+            session,
+            user_id=user.id,
+            channel="system",
+            direction="system",
+            type="signal",
+            payload=result.signal,
+            trace_id=trace_id,
+            clock=clock,
+            idempotency_key=f"signal:{trigger.id}",
+        )
+        trigger.status = "fired"
+        return
+
+    outcomes = []
+    for draft in result.candidates:
+        candidate = await get_or_create_candidate(session, trigger=trigger, draft=draft)
+        outcomes.append(
+            await process_candidate(
+                session,
+                user=user,
+                prefs=prefs,
+                candidate=candidate,
+                trigger=trigger,
+                adapter=adapter,
+                clock=clock,
+                settings=settings,
+                gateway=gateway,
+                trace_id=trace_id,
+            )
+        )
+
+    if any(outcome.decision == "defer" for outcome in outcomes):
+        # process_candidate 已把 trigger 退回 pending 并设置 next_attempt_at
+        return
+    failed = next(
+        (o for o in outcomes if o.decision == "send" and not o.delivered), None
+    )
+    if failed is not None:
+        raise RuntimeError(f"trigger delivery failed: {failed.error}")
+    if all(outcome.decision == "drop" for outcome in outcomes):
+        trigger.status = "dropped"
+        return
     trigger.status = "fired"
     logger.info("trigger fired: id=%s kind=%s channel=%s", trigger.id, trigger.kind, adapter.channel)
 
@@ -125,7 +211,8 @@ async def process_claimed_trigger(
     trigger_id: uuid.UUID,
     adapters: dict[str, ChannelAdapter],
     clock: Clock,
-    gate: PassthroughGate,
+    settings: Settings,
+    gateway: LLMGateway | None = None,
 ) -> bool:
     """处理一条已领取的 trigger。成功返回 True；失败时记录退避或置 failed。"""
     try:
@@ -133,7 +220,14 @@ async def process_claimed_trigger(
             trigger = await session.get(TriggerInstance, trigger_id)
             if trigger is None or trigger.status != "claimed":
                 return True  # 已被回收或已终态
-            await process_trigger(session, trigger=trigger, adapters=adapters, clock=clock, gate=gate)
+            await process_trigger(
+                session,
+                trigger=trigger,
+                adapters=adapters,
+                clock=clock,
+                settings=settings,
+                gateway=gateway,
+            )
             await session.commit()
         return True
     except Exception as exc:
@@ -174,35 +268,63 @@ async def _record_failure(
         await session.commit()
 
 
+def build_gateway(
+    settings: Settings,
+    sessionmaker: async_sessionmaker[AsyncSession],
+    clock: Clock,
+) -> LLMGateway:
+    """构造与 api/feishu 服务一致的网关（brief_compose 需要）。"""
+    providers: dict[str, BaseProvider] = {
+        "openai_compat": OpenAICompatProvider(settings.llm_base_url, settings.llm_api_key),
+        "openai_compat_agent": OpenAICompatProvider(
+            settings.llm_agent_base_url, settings.llm_agent_api_key
+        ),
+    }
+    return LLMGateway(
+        aliases_path=settings.aliases_path,
+        providers=providers,
+        sessionmaker=sessionmaker,
+        clock=clock,
+        daily_limit=settings.llm_daily_limit,
+    )
+
+
 async def run_worker() -> None:
-    """worker 主循环。"""
+    """worker 主循环：物化 → 回收租约 → 领取 → 处理。"""
     settings = get_settings()
     setup_logging(settings.log_level)
     clock = Clock()
     engine = make_engine(settings.database_url)
     sessionmaker = make_sessionmaker(engine)
+    gateway = build_gateway(settings, sessionmaker, clock)
 
     adapters: dict[str, ChannelAdapter] = {
         "console": ConsoleAdapter(make_identity_resolver(sessionmaker, "console"))
     }
     if settings.feishu_app_id and settings.feishu_app_secret:
-        # worker 只用发送客户端，不启动长连接
         adapters["feishu"] = FeishuAdapter(
             make_identity_resolver(sessionmaker, "feishu"),
             app_id=settings.feishu_app_id,
             app_secret=settings.feishu_app_secret,
         )
-    gate = PassthroughGate()
 
-    # 启动复位上次运行遗留的 claimed（单实例 worker 安全）
     async with sessionmaker() as session:
         reset = await reset_stale_claimed(session)
         if reset:
             logger.info("startup: reset %d stale claimed triggers to pending", reset)
         await session.commit()
 
+    last_materialized: dt.datetime | None = None
     while True:
-        # 1) 回收租约超时的 claimed
+        now = clock.now()
+        if (
+            last_materialized is None
+            or (now - last_materialized).total_seconds() >= settings.materialize_interval_seconds
+        ):
+            await run_materializer(sessionmaker, clock=clock, settings=settings)
+            await arbitrate_pending_suggestions(sessionmaker, clock=clock, settings=settings)
+            last_materialized = now
+
         async with sessionmaker() as session:
             reclaimed = await reclaim_expired_leases(
                 session, now=clock.now(), lease_seconds=settings.trigger_lease_seconds
@@ -228,7 +350,6 @@ async def run_worker() -> None:
             if reclaimed:
                 await session.commit()
 
-        # 2) 领取并立即提交，保证 claimed_at / attempts 落库
         async with sessionmaker() as session:
             claimed = await claim_due_triggers(
                 session, now=clock.now(), limit=settings.worker_batch_size
@@ -236,7 +357,12 @@ async def run_worker() -> None:
             await session.commit()
         for trigger in claimed:
             await process_claimed_trigger(
-                sessionmaker, trigger_id=trigger.id, adapters=adapters, clock=clock, gate=gate
+                sessionmaker,
+                trigger_id=trigger.id,
+                adapters=adapters,
+                clock=clock,
+                settings=settings,
+                gateway=gateway,
             )
         await asyncio.sleep(settings.worker_poll_interval)
 

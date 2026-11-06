@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.clock import Clock
 from app.core.ids import new_uuid7
-from app.db.models import TriggerInstance, WorkItem
+from app.db.models import PlannedBlock, TriggerInstance, WorkItem
 
 TRIGGER_MAX_ATTEMPTS = 5
 TRIGGER_BACKOFF_BASE_SECONDS = 30.0
@@ -32,8 +32,8 @@ async def create_trigger(
     precondition: dict | None = None,
     expires_at: dt.datetime | None = None,
     clock: Clock,
-) -> TriggerInstance:
-    """幂等创建 trigger：key 冲突时返回既有记录。"""
+) -> tuple[TriggerInstance, bool]:
+    """幂等创建 trigger：返回 (记录, 是否新建)；key 冲突时返回既有记录与 False。"""
     values = {
         "id": new_uuid7(),
         "user_id": user_id,
@@ -55,11 +55,11 @@ async def create_trigger(
     )
     row = (await session.execute(stmt)).scalar_one_or_none()
     if row is not None:
-        return row
+        return row, True
     existing = (
         await session.execute(select(TriggerInstance).where(TriggerInstance.key == key))
     ).scalar_one()
-    return existing
+    return existing, False
 
 
 async def claim_due_triggers(
@@ -163,10 +163,12 @@ async def reset_stale_claimed(session: AsyncSession) -> int:
 async def check_precondition(
     session: AsyncSession, trigger: TriggerInstance
 ) -> tuple[bool, str]:
-    """触发前重新校验前提；阶段 1 仅支持关联任务未完成/未放弃。"""
+    """触发前重新校验前提；支持关联任务与计划块。"""
     precondition = trigger.precondition
     if not precondition:
         return True, ""
+    if "block_id" in precondition:
+        return await _check_block_precondition(session, precondition)
     task_id = precondition.get("task_id")
     if not task_id:
         return True, ""
@@ -181,4 +183,30 @@ async def check_precondition(
         return False, f"关联任务不存在：{task_id}"
     if item.status in ("done", "dropped"):
         return False, f"关联任务已{item.status}，取消提醒"
+    return True, ""
+
+
+async def _check_block_precondition(
+    session: AsyncSession, precondition: dict
+) -> tuple[bool, str]:
+    """计划块前提：仍为 planned 且（block_start）开始时间未变。"""
+    raw_id = precondition.get("block_id")
+    try:
+        block_uuid = uuid.UUID(str(raw_id))
+    except (ValueError, TypeError):
+        return False, f"计划块 id 非法：{raw_id}"
+    block = await session.get(PlannedBlock, block_uuid)
+    if block is None:
+        return False, "计划块不存在"
+    if block.status != "planned":
+        return False, f"计划块已{block.status}"
+    expected_starts = precondition.get("expected_starts_at")
+    if expected_starts:
+        try:
+            expected = dt.datetime.fromisoformat(str(expected_starts))
+        except ValueError:
+            return False, f"计划块时间格式非法：{expected_starts}"
+        # 数据库取回的是 UTC aware，payload 里是原始时区字符串；必须按时刻比较而非字符串
+        if block.starts_at != expected:
+            return False, "计划块时间已变更"
     return True, ""

@@ -1,4 +1,5 @@
 from app.db.models.event_log import EventLog
+from app.db.models.inbound_processing import InboundProcessing
 from app.db.models.llm_call import LLMCall
 from app.db.models.memory import Memory, MemoryDecisionLog, MemorySource
 from app.db.models.nudge import Delivery, NotifPrefs, NudgeCandidate, NudgeDecision
@@ -10,6 +11,7 @@ __all__ = [
     "ChannelIdentity",
     "Delivery",
     "EventLog",
+    "InboundProcessing",
     "LLMCall",
     "Memory",
     "MemoryDecisionLog",

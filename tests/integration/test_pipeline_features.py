@@ -1,13 +1,16 @@
 """阶段 1 修订新增行为（需要 Postgres）：
-- 飞书 open_id 白名单
+- 飞书 open_id 白名单（对所有渠道生效）
 - 首答告知所用时区（仅首次）
 - set_timezone 工具
 - 每用户每日 LLM 调用上限
 - llm_call 与日志不含 API 密钥
+- llm_call.model_id 记模型实际返回的 id
+- 入站处理状态（inbound_processing）与启动补处理
 """
 
 import logging
 from collections.abc import Callable
+from dataclasses import replace
 
 from sqlalchemy import select
 
@@ -15,7 +18,7 @@ from app.adapters.base import InboundEvent
 from app.adapters.console_adapter import ConsoleAdapter
 from app.adapters.identity import make_identity_resolver
 from app.core.config import Settings
-from app.db.models import EventLog, LLMCall, User
+from app.db.models import EventLog, InboundProcessing, LLMCall, User
 from app.engine.pipeline import InboundPipeline
 from app.llm.gateway import LLMGateway
 from app.llm.schemas import LLMResult, ToolCall, Usage
@@ -63,7 +66,7 @@ async def test_feishu_whitelist_drops_unlisted_open_id(db, fake_clock):
     settings = Settings(_env_file=None, allowed_open_ids="ou_alice,ou_bob")
     pipeline, _ = _make_pipeline(db, fake_clock, settings)
 
-    # 白名单外：静默丢弃，不建用户、不写事件
+    # 白名单外（feishu）：静默丢弃，不建用户、不写事件
     assert await pipeline.ingest(_feishu_event("ou_mallory", "f-1")) is None
     async with db() as session:
         users = (await session.execute(select(User))).scalars().all()
@@ -75,8 +78,10 @@ async def test_feishu_whitelist_drops_unlisted_open_id(db, fake_clock):
     ingested = await pipeline.ingest(_feishu_event("ou_alice", "f-2"))
     assert ingested is not None and ingested.created
 
-    # console 渠道不受白名单限制
-    ingested = await pipeline.ingest(_console_event("hello", "c-1", user="anyone"))
+    # 白名单对所有渠道生效：console 的外部 id 不在名单内同样被丢弃
+    assert await pipeline.ingest(_console_event("hello", "c-1", user="anyone")) is None
+    # console 使用名单内的 id 则放行
+    ingested = await pipeline.ingest(_console_event("hello", "c-2", user="ou_bob"))
     assert ingested is not None and ingested.created
 
 
@@ -256,3 +261,127 @@ async def test_secrets_absent_from_llm_call_and_logs(db, fake_clock):
             [call.alias, call.provider, call.model_id, call.params, call.request, call.response, call.error]
         )
         assert SECRET not in dump
+
+
+async def test_llm_call_records_provider_reported_model_id(db, fake_clock, settings):
+    """llm_call.model_id 以模型实际返回的 id 为准（ark-code-latest 模式下与配置不同）。"""
+
+    class RenamedProvider(FakeProvider):
+        async def complete(self, *, model, messages, tools, params):
+            result = await super().complete(
+                model=model, messages=messages, tools=tools, params=params
+            )
+            return replace(result, model_id="ark-console-selected-model")
+
+    gateway = LLMGateway(
+        aliases_path=str(TEST_ALIASES),
+        providers={"fake": RenamedProvider(_plain_responder("你好！"))},
+        sessionmaker=db,
+        clock=fake_clock,
+        daily_limit=0,
+    )
+    pipeline = InboundPipeline(
+        sessionmaker=db,
+        clock=fake_clock,
+        settings=settings,
+        gateway=gateway,
+        adapters={"console": ConsoleAdapter(make_identity_resolver(db, "console"))},
+    )
+    await pipeline.handle(_console_event("你好", "mid-1"))
+
+    async with db() as session:
+        calls = (await session.execute(select(LLMCall))).scalars().all()
+    assert calls, "llm_call 应有记录"
+    assert all(c.model_id == "ark-console-selected-model" for c in calls)
+
+
+async def test_inbound_processing_status_and_startup_recovery(db, fake_clock, settings):
+    """ingest 落库即 processing；process 完成→done；未完成的在启动时补处理。"""
+    pipeline, console = _make_pipeline(db, fake_clock, settings)
+
+    # 模拟崩溃：只 ingest，不 process
+    ingested = await pipeline.ingest(_console_event("你好", "rec-1"))
+    async with db() as session:
+        row = await session.get(InboundProcessing, ingested.event_id)
+    assert row is not None and row.status == "processing"
+
+    # 正常处理路径 → done
+    await pipeline.handle(_console_event("第二句", "rec-2"))
+    async with db() as session:
+        rows = (
+            await session.execute(
+                select(InboundProcessing).where(InboundProcessing.status == "done")
+            )
+        ).scalars().all()
+    assert len(rows) == 1
+
+    # 启动补处理：重放仍为 processing 的事件
+    recovered = await pipeline.recover_unfinished()
+    assert recovered == 1
+    assert len(console.messages_for("u1")) == 2  # rec-1 补发的回复 + rec-2 的回复
+
+    async with db() as session:
+        row = await session.get(InboundProcessing, ingested.event_id)
+    assert row.status == "done"
+    assert await pipeline.recover_unfinished() == 0
+
+
+async def test_recovery_replay_does_not_duplicate_work(db, fake_clock, settings):
+    """补处理重放同一事件：工具幂等键保证不产生重复任务/提醒。"""
+
+    def responder(messages: list[dict]) -> LLMResult:
+        # 第一步：create_task；第二步：收尾文本
+        if any(m.get("role") == "tool" for m in messages):
+            return LLMResult(content="记好了", usage=Usage(input=1, cached=0, output=1, reasoning=0))
+        return LLMResult(
+            content="",
+            tool_calls=[ToolCall(id="c1", name="create_task", arguments={"title": "买牛奶"})],
+            usage=Usage(input=1, cached=0, output=1, reasoning=0),
+        )
+
+    gateway = LLMGateway(
+        aliases_path=str(TEST_ALIASES),
+        providers={"fake": FakeProvider(responder)},
+        sessionmaker=db,
+        clock=fake_clock,
+        daily_limit=0,
+    )
+    pipeline = InboundPipeline(
+        sessionmaker=db,
+        clock=fake_clock,
+        settings=settings,
+        gateway=gateway,
+        adapters={"console": ConsoleAdapter(make_identity_resolver(db, "console"))},
+    )
+
+    ingested = await pipeline.ingest(_console_event("记一下：买牛奶", "dup-1"))
+    # 先完整处理一次（业务数据已落库），再把状态拨回 processing 模拟"回复后崩溃"
+    await pipeline.process(ingested)
+    async with db() as session:
+        session_row = await session.get(InboundProcessing, ingested.event_id)
+        session_row.status = "processing"
+        await session.commit()
+
+    await pipeline.recover_unfinished()
+
+    from app.db.models import WorkItem
+
+    async with db() as session:
+        items = (await session.execute(select(WorkItem))).scalars().all()
+    assert len(items) == 1  # 重放未重复建任务
+
+
+async def test_process_marks_failed_on_crash(db, fake_clock, settings, monkeypatch):
+    """process 意外崩溃时置 failed（fallback 兜底除外），不静默丢事件。"""
+    pipeline, _ = _make_pipeline(db, fake_clock, settings)
+
+    async def boom(ingested):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(pipeline, "_process_one", boom)
+    ingested = await pipeline.ingest(_console_event("你好", "crash-1"))
+    await pipeline.process(ingested)
+
+    async with db() as session:
+        row = await session.get(InboundProcessing, ingested.event_id)
+    assert row is not None and row.status == "failed"

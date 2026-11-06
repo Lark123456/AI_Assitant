@@ -1,8 +1,10 @@
 # 档位别名 -> provider / model / params / fallback
 # 业务代码只允许引用别名，禁止出现模型名字符串。
-# 走方舟 Coding Plan 专用端点（见 .env 的 LLM_BASE_URL），model 用套餐 Model Name：
-#  - ark-code-latest：实际模型在方舟控制台「开通管理」选择/切换（3-5 分钟生效，支持 Auto 模式）
-#  - 也可指定具体套餐模型名，如 deepseek-v4.1-flash / deepseek-v4.1-flash-economy / doubao-seed-2.1-pro / glm-5.3-flash / kimi-k3.1-pro 等
+# 两套凭据 profile（注册点见 main.py / feishu_main.py）：
+#  - openai_compat：方舟 Coding Plan 端点（.env 的 LLM_BASE_URL / LLM_API_KEY），Friday 全系
+#  - openai_compat_agent：方舟 Agent Plan 端点（.env 的 LLM_AGENT_*），Jarvis 深档专用
+# ark-code-latest：实际模型在方舟控制台「开通管理」选择/切换（3-5 分钟生效，支持 Auto 模式）；
+# 注意同一别名在两个套餐端点下各自独立解析（Coding → 控制台所选的编码模型，Agent → 所选的推理模型）。
 friday_fast:
   provider: openai_compat
   model: ark-code-latest
@@ -25,11 +27,11 @@ mini_plan:
     temperature: 0.2
     timeout: 60
 jarvis_deep:
-  provider: openai_compat
-  model: doubao-seed-2.1-pro
+  provider: openai_compat_agent
+  model: ark-code-latest
   params:
     max_tokens: 4096
-    temperature: 0.4
+    # 不配置 temperature：Agent 套餐的推理模型（如 kimi-k3.1-pro）仅允许默认值 1
     timeout: 120
 vision_extract:
   provider: openai_compat
@@ -38,5 +40,13 @@ vision_extract:
     max_tokens: 1024
     temperature: 0.0
     timeout: 60
+brief_compose:
+  provider: openai_compat
+  model: ark-code-latest
+  params:
+    # 只生成一句开场语；超时 3 秒即回退模板
+    max_tokens: 120
+    temperature: 0.7
+    timeout: 3
 
 

@@ -4,6 +4,7 @@
 （inbound_event_id + 工具名 + 调用序号），同一入站事件重放只产生一个任务。
 """
 
+import datetime as dt
 import uuid
 
 import pytest
@@ -195,3 +196,37 @@ async def test_complete_task_repeated_calls_are_idempotent(
         ).scalars().all()
         assert len(items) == 1
         assert items[0].status == "done"
+
+
+async def test_set_reminder_deduplicated_reflects_creation(
+    db, user, inbound_event, fake_clock, settings
+):
+    """set_reminder 首次执行 deduplicated=False；同键重放 deduplicated=True 且只建一个 trigger。"""
+    from app.db.models import TriggerInstance
+
+    args = {
+        "fire_at": (fake_clock.now() + dt.timedelta(days=1)).isoformat(),
+        "note": "交报告",
+    }
+    results = []
+    for _ in range(2):
+        async with db() as session:
+            u = (await session.execute(select(User).where(User.id == user))).scalar_one()
+            result = await execute_tool(
+                _ctx(session, u, fake_clock, settings, inbound_event),
+                "set_reminder", args, call_index=1,
+            )
+            await session.commit()
+            results.append(result)
+
+    assert all(r.status == "ok" for r in results)
+    # 修正点：首次创建 deduplicated=False（旧实现因刚建的 trigger 即 pending 而误报 True）
+    assert results[0].data["deduplicated"] is False
+    # 重放返回首次的缓存结果，trigger 也只有一个
+    assert results[1].data["trigger_id"] == results[0].data["trigger_id"]
+
+    async with db() as session:
+        triggers = (
+            await session.execute(select(TriggerInstance).where(TriggerInstance.user_id == user))
+        ).scalars().all()
+    assert len(triggers) == 1

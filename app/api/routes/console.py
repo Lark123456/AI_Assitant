@@ -1,12 +1,11 @@
-"""Console 渠道路由：本地测试入口。"""
-
-import asyncio
+"""Console 渠道路由：本地测试入口（由 ENABLE_CONSOLE 控制，默认关闭）。"""
 
 from fastapi import APIRouter, Request
 from pydantic import BaseModel, Field
 
 from app.adapters.base import InboundEvent
 from app.core.ids import new_idempotency_key
+from app.core.tasks import spawn
 
 router = APIRouter(prefix="/console")
 
@@ -32,7 +31,8 @@ async def post_message(body: ConsoleMessageIn, request: Request) -> dict:
     if ingested is None:
         return {"status": "dropped"}
     if ingested.created:
-        asyncio.create_task(pipeline.process(ingested))
+        # 后台处理：引用由 app.core.tasks 持有，done 回调自动清理并记录异常
+        spawn(pipeline.process(ingested))
     return {
         "status": "accepted",
         "idempotency_key": event.idempotency_key,

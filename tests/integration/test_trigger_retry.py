@@ -11,8 +11,8 @@ from sqlalchemy import select
 from app.adapters.base import OutboundIntent
 from app.adapters.console_adapter import ConsoleAdapter
 from app.adapters.identity import make_identity_resolver
+from app.core.config import Settings
 from app.db.models import ChannelIdentity, EventLog, TriggerInstance, User
-from app.engine.gate import PassthroughGate
 from app.engine.triggers import (
     TRIGGER_BACKOFF_BASE_SECONDS,
     TRIGGER_MAX_ATTEMPTS,
@@ -28,6 +28,15 @@ class BrokenAdapter(ConsoleAdapter):
 
     async def send(self, intent: OutboundIntent):  # type: ignore[override]
         raise RuntimeError("delivery backend down")
+
+
+class RefusedAdapter(ConsoleAdapter):
+    """send 正常返回但 ok=False（渠道拒绝），用于验证投递失败也进退避重试。"""
+
+    async def send(self, intent: OutboundIntent):  # type: ignore[override]
+        from app.adapters.base import DeliveryResult
+
+        return DeliveryResult(ok=False, error="feishu send failed: code=230002")
 
 
 async def _make_user(db, clock) -> uuid.UUID:
@@ -57,11 +66,12 @@ async def test_backoff_schedule_and_failed_terminal_state(db, fake_clock):
     assert [trigger_backoff_seconds(n) for n in range(1, 6)] == [30, 60, 120, 240, 480]
 
     async with db() as session:
-        trigger = await create_trigger(
+        trigger, created = await create_trigger(
             session, user_id=user_id, kind="reminder", key="r-bo",
             fire_at=now, tz="Asia/Shanghai", payload={"note": "退避", "trace_id": "tr-bo"},
             clock=fake_clock,
         )
+        assert created
         await session.commit()
         trigger_id = trigger.id
 
@@ -78,7 +88,7 @@ async def test_backoff_schedule_and_failed_terminal_state(db, fake_clock):
         failure_at = fake_clock.now()
         ok = await process_claimed_trigger(
             db, trigger_id=trigger_id, adapters={"console": adapter},
-            clock=fake_clock, gate=PassthroughGate(),
+            clock=fake_clock, settings=Settings(_env_file=None),
         )
         assert ok is False  # 发送失败
 
@@ -123,11 +133,12 @@ async def test_deliver_is_idempotent_across_reprocessing(db, fake_clock):
     now = fake_clock.now()
 
     async with db() as session:
-        trigger = await create_trigger(
+        trigger, created = await create_trigger(
             session, user_id=user_id, kind="reminder", key="r-idem",
             fire_at=now, tz="Asia/Shanghai", payload={"note": "只发一次", "trace_id": "tr-idem"},
             clock=fake_clock,
         )
+        assert created
         await session.commit()
         trigger_id = trigger.id
 
@@ -140,7 +151,7 @@ async def test_deliver_is_idempotent_across_reprocessing(db, fake_clock):
     # 第一次处理成功
     assert await process_claimed_trigger(
         db, trigger_id=trigger_id, adapters={"console": console},
-        clock=fake_clock, gate=PassthroughGate(),
+        clock=fake_clock, settings=Settings(_env_file=None),
     )
     nudges = [m for m in console.messages_for("u1") if m["type"] == "nudge"]
     assert len(nudges) == 1
@@ -153,7 +164,7 @@ async def test_deliver_is_idempotent_across_reprocessing(db, fake_clock):
         await session.commit()
     assert await process_claimed_trigger(
         db, trigger_id=trigger_id, adapters={"console": console},
-        clock=fake_clock, gate=PassthroughGate(),
+        clock=fake_clock, settings=Settings(_env_file=None),
     )
     assert len([m for m in console.messages_for("u1") if m["type"] == "nudge"]) == 1
 
@@ -165,3 +176,51 @@ async def test_deliver_is_idempotent_across_reprocessing(db, fake_clock):
             await session.execute(select(Delivery).where(Delivery.sent_at.is_not(None)))
         ).scalars().all()
     assert len(deliveries) == 1
+
+
+async def test_send_refused_enters_backoff_and_fails(db, fake_clock):
+    """adapter.send 返回 ok=False（决策 send 但未送达）：trigger 回 pending、
+    attempts 递增进入退避，耗尽后置 failed（不会误置 fired）。"""
+    user_id = await _make_user(db, fake_clock)
+    now = fake_clock.now()
+
+    async with db() as session:
+        trigger, _ = await create_trigger(
+            session, user_id=user_id, kind="reminder", key="r-refuse",
+            fire_at=now, tz="Asia/Shanghai", payload={"note": "被拒", "trace_id": "tr-rf"},
+            clock=fake_clock,
+        )
+        await session.commit()
+        trigger_id = trigger.id
+
+    adapter = RefusedAdapter(make_identity_resolver(db, "console"))
+
+    for attempt in range(1, TRIGGER_MAX_ATTEMPTS + 1):
+        async with db() as session:
+            claimed = await claim_due_triggers(session, now=fake_clock.now(), limit=10)
+            await session.commit()
+        assert len(claimed) == 1
+        assert claimed[0].attempts == attempt
+
+        ok = await process_claimed_trigger(
+            db, trigger_id=trigger_id, adapters={"console": adapter},
+            clock=fake_clock, settings=Settings(_env_file=None),
+        )
+        assert ok is False  # ok=False 视为投递失败
+
+        async with db() as session:
+            row = await session.get(TriggerInstance, trigger_id)
+            assert row.status != "fired"  # 关键：失败绝不能置 fired
+            if attempt < TRIGGER_MAX_ATTEMPTS:
+                assert row.status == "pending"
+                assert row.next_attempt_at is not None
+                fake_clock.advance_to(row.next_attempt_at)
+            else:
+                assert row.status == "failed"
+                assert "code=230002" in (row.last_error or "")
+
+    # 耗尽后不再被领取
+    async with db() as session:
+        claimed = await claim_due_triggers(session, now=fake_clock.now(), limit=10)
+        await session.commit()
+    assert claimed == []

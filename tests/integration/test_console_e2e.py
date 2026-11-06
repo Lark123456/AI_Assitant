@@ -9,8 +9,8 @@ import re
 from sqlalchemy import select
 
 from app.adapters.base import InboundEvent
+from app.core.config import Settings
 from app.db.models import Delivery, EventLog, LLMCall, TriggerInstance, WorkItem
-from app.engine.gate import PassthroughGate
 from app.engine.triggers import claim_due_triggers
 from app.llm.schemas import LLMResult, ToolCall, Usage
 from app.worker.runner import process_claimed_trigger
@@ -57,12 +57,17 @@ def reminder_script(clock):
 
 async def _run_due_triggers(db, fake_clock, adapters):
     """worker 主路径：领取（立即提交）→ 逐条处理。"""
+
     async with db() as session:
         claimed = await claim_due_triggers(session, now=fake_clock.now(), limit=10)
         await session.commit()
     for trigger in claimed:
         await process_claimed_trigger(
-            db, trigger_id=trigger.id, adapters=adapters, clock=fake_clock, gate=PassthroughGate()
+            db,
+            trigger_id=trigger.id,
+            adapters=adapters,
+            clock=fake_clock,
+            settings=Settings(_env_file=None),
         )
     return claimed
 
@@ -105,7 +110,7 @@ async def test_reminder_roundtrip(db, fake_clock, make_pipeline):
     # 5. 提醒送达 Console，链路状态正确
     nudges = [m for m in console.messages_for("u1") if m["type"] == "nudge"]
     assert len(nudges) == 1
-    assert nudges[0]["body"]["text"] == "记得交报告"
+    assert nudges[0]["body"]["text"].startswith("记得交报告")
     async with db() as session:
         trigger = (await session.execute(select(TriggerInstance))).scalar_one()
         assert trigger.status == "fired"
