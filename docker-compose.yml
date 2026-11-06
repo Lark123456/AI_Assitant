@@ -18,6 +18,20 @@ services:
       retries: 15
     restart: unless-stopped
 
+  ollama:
+    image: ollama/ollama:latest
+    volumes:
+      - ollama:/root/.ollama
+    ports:
+      # 仅绑定本机回环：宿主机脚本/测试直连 127.0.0.1:11434
+      - "127.0.0.1:11434:11434"
+    healthcheck:
+      test: ["CMD-SHELL", "ollama list >/dev/null 2>&1 || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
   api:
     build: .
     command: uv run --no-dev uvicorn app.main:app --host 0.0.0.0 --port 8000
@@ -25,14 +39,17 @@ services:
       - path: .env
         required: false
     environment:
-      # compose 网络内用 db 主机名覆盖宿主机地址
+      # compose 网络内用 db 主机名覆盖宿主机地址；嵌入走内部网络名
       DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-butler}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD 未设置（请写入 .env）}@db:5432/${POSTGRES_DB:-butler}
+      EMBEDDING_BASE_URL: http://ollama:11434
     ports:
       # 绑回环：WSL(wslhost) 只转发绑 127.0.0.1 的端口到 Windows localhost，且不暴露局域网
       - "127.0.0.1:8000:8000"
     depends_on:
       db:
         condition: service_healthy
+      ollama:
+        condition: service_started
     restart: unless-stopped
 
   worker:
@@ -43,9 +60,12 @@ services:
         required: false
     environment:
       DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-butler}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD 未设置（请写入 .env）}@db:5432/${POSTGRES_DB:-butler}
+      EMBEDDING_BASE_URL: http://ollama:11434
     depends_on:
       db:
         condition: service_healthy
+      ollama:
+        condition: service_started
     restart: unless-stopped
 
   feishu:
@@ -57,9 +77,12 @@ services:
         required: false
     environment:
       DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-butler}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD 未设置（请写入 .env）}@db:5432/${POSTGRES_DB:-butler}
+      EMBEDDING_BASE_URL: http://ollama:11434
     depends_on:
       db:
         condition: service_healthy
+      ollama:
+        condition: service_started
     restart: unless-stopped
 
   adminer:
@@ -69,8 +92,8 @@ services:
       ADMINER_DEFAULT_SERVER: db
       ADMINER_DESIGN: pepa-linha
     ports:
-      # 0.0.0.0 让 Windows 侧能通过 WSL IP 访问；WSL 内部 NAT 实际只有本机可达
-      - "0.0.0.0:8080:8080"
+      # 仅绑定本机回环，不暴露到局域网
+      - "127.0.0.1:8080:8080"
     depends_on:
       db:
         condition: service_healthy
@@ -78,3 +101,4 @@ services:
 
 volumes:
   pgdata:
+  ollama:

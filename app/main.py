@@ -20,6 +20,7 @@ from app.core.clock import Clock
 from app.core.config import get_settings
 from app.core.logging import get_logger, setup_logging
 from app.db.base import make_engine, make_sessionmaker
+from app.embeddings.service import build_embedding_service
 from app.engine.pipeline import InboundPipeline
 from app.llm.gateway import LLMGateway
 from app.llm.providers.base import BaseProvider
@@ -58,6 +59,7 @@ def create_app() -> FastAPI:
         settings=settings,
         gateway=gateway,
         adapters=adapters,
+        embedder=build_embedding_service(settings),
     )
 
     @asynccontextmanager

@@ -1,7 +1,12 @@
 from app.db.models.event_log import EventLog
 from app.db.models.inbound_processing import InboundProcessing
 from app.db.models.llm_call import LLMCall
-from app.db.models.memory import Memory, MemoryDecisionLog, MemorySource
+from app.db.models.memory import (
+    Memory,
+    MemoryDecisionLog,
+    MemoryExtractionRun,
+    MemorySource,
+)
 from app.db.models.nudge import Delivery, NotifPrefs, NudgeCandidate, NudgeDecision
 from app.db.models.trigger import TriggerInstance
 from app.db.models.user import ChannelIdentity, User
@@ -15,6 +20,7 @@ __all__ = [
     "LLMCall",
     "Memory",
     "MemoryDecisionLog",
+    "MemoryExtractionRun",
     "MemorySource",
     "NudgeCandidate",
     "NudgeDecision",

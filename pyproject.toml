@@ -38,6 +38,9 @@ asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 testpaths = ["tests"]
 pythonpath = ["."]
+markers = [
+    "requires_embedding: 需要真实 Ollama 嵌入服务（设置 REQUIRE_EMBEDDING=1 后才运行）",
+]
 
 [tool.ruff]
 line-length = 100

@@ -8,8 +8,10 @@ from sqlalchemy import (
     CheckConstraint,
     DateTime,
     ForeignKey,
+    Index,
     Integer,
     Text,
+    UniqueConstraint,
     Uuid,
 )
 from sqlalchemy.dialects.postgresql import JSONB
@@ -29,6 +31,8 @@ class Memory(Base):
         CheckConstraint(
             "status IN ('active', 'superseded', 'retracted', 'pending')", name="status_values"
         ),
+        Index("ix_memory_user_status", "user_id", "status"),
+        Index("ix_memory_user_type_slot", "user_id", "type", "slot_key"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=new_uuid7)
@@ -73,6 +77,10 @@ class MemoryDecisionLog(Base):
     )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=new_uuid7)
+    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("user.id"), index=True)
+    run_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("memory_extraction_run.id"), index=True
+    )
     memory_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("memory.id"), index=True)
     candidate: Mapped[dict | None] = mapped_column(JSONB)
     neighbors: Mapped[dict | None] = mapped_column(JSONB)
@@ -81,3 +89,26 @@ class MemoryDecisionLog(Base):
     alias: Mapped[str | None] = mapped_column(Text)
     llm_call_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("llm_call.id"))
     created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True))
+
+
+class MemoryExtractionRun(Base):
+    """一次抽取批次；attempts 与退避放在 stats，不额外建字段。"""
+
+    __tablename__ = "memory_extraction_run"
+    __table_args__ = (
+        CheckConstraint("status IN ('pending', 'done', 'failed')", name="status_values"),
+        UniqueConstraint(
+            "user_id", "to_event_id", "extractor_version", name="uq_memory_extraction_run_target"
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=new_uuid7)
+    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("user.id"), index=True)
+    to_event_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("event_log.id"))
+    extractor_version: Mapped[str] = mapped_column(Text)
+    event_count: Mapped[int] = mapped_column(Integer, default=0)
+    status: Mapped[str] = mapped_column(Text, default="pending")
+    stats: Mapped[dict] = mapped_column(JSONB, default=dict)
+    error: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True))
+    finished_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))

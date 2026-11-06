@@ -96,7 +96,10 @@ async def claim_due_triggers(
         .returning(TriggerInstance)
     )
     result = await session.execute(stmt)
-    return list(result.scalars().all())
+    # UPDATE ... RETURNING 不保证子查询顺序；显式按 fire_at 排序，保证先到期的先处理
+    rows = list(result.scalars().all())
+    rows.sort(key=lambda row: (row.fire_at, str(row.id)))
+    return rows
 
 
 async def reclaim_expired_leases(

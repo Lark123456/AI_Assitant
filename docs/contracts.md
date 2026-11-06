@@ -2,6 +2,20 @@
 
 ## 变更记录
 
+### 变更（阶段 3a）
+1. 新表 memory_extraction_run：id、user_id（FK user）、to_event_id（FK event_log）、extractor_version、event_count、status（pending | done | failed）、stats（jsonb，含 attempts / next_attempt_at / 计数）、error、created_at、finished_at；唯一约束 (user_id, to_event_id, extractor_version)。
+2. memory_decision_log 新增 user_id（FK user，NOT NULL）、run_id（FK memory_extraction_run，可空）；迁移前按 memory_id → memory.user_id 回填，剩余无法归属的存量测试行删除并记录警告，之后才加 NOT NULL。
+3. memory 增加索引：(user_id, status)、(user_id, type, slot_key)，以及 embedding 的 HNSW cosine 索引。
+4. LLM 别名：新增 memory_resolve（temperature 0、max_tokens 512、timeout 30）；memory_extract 的 max_tokens 提到 2048。
+5. 新增 7 个配置：EMBEDDING_BASE_URL、EMBEDDING_MODEL、EMBEDDING_DIM=1024、MEMORY_IDLE_MINUTES=10、MEMORY_BATCH_MAX_EVENTS=40、MEMORY_NEIGHBOR_THRESHOLD=0.75、MEMORY_NEIGHBOR_TOPK=5。
+6. memory.value 统一形状：{"text": string, "time": "HH:MM"（可空）, "date": "YYYY-MM-DD"（可空）}；memory.scope 统一形状：{"kind": "persistent"} | {"kind": "on", "date": "YYYY-MM-DD"} | {"kind": "until", "date": "YYYY-MM-DD"} | {"kind": "recurring", "rule": string}。相对日期由代码按事件时间、用户时区与 day_start 归一化，LLM 只输出 date_text。
+7. 证据规则：用户消息取 payload.text；tool_result 只能引用「成功工具调用的已验证参数快照」的确定性还原文本（schedule_block 取标题/开始/结束；update_block_status 取块与状态；reschedule_block 取块/开始/结束；set_notif_prefs 取非空参数），禁止使用 payload.message（人话文案）。证据片段按忽略空白差异逐字回查。
+8. 抽取 run 重试：单个 run 失败最多自动重试 3 次（共 4 次尝试），退避 30/60/120 秒，尝试次数与下次时间记录在 stats；4 次仍失败置 failed 并写错误日志，调度指针前移，不阻塞后续事件。同一 run 重试时，已处理过的候选按「run_id + 候选指纹」识别，直接跳过，不再重复写决策日志。
+9. 开放事实的向量近邻只在 active 记忆中检索，pending 记忆不进入近邻候选。
+10. 敏感类别：health | finance | exact_location | third_party | credentials；默认拒绝，只有证据中出现明确「记住」意图或走 remember 同步工具时放行。
+11. remember 工具允许同步写入 slot、preference、episode；state_signal 只允许异步抽取。槽位冲突返回 pending_confirmation 并附旧值，不静默覆盖。
+12. 阶段 3a 不写 source_class=confirmed；该值留给阶段 3b 用户确认后升级。
+
 ### 变更（阶段 2）
 1. notif_prefs 新增 morning_brief_time（默认 08:30）、evening_brief_time（默认 21:00）、briefs_enabled（默认 true）。
 2. trigger_instance 新增 defer_count（免打扰延后次数，上限 3）；reminder 的 expires_at 改为 fire_at + REMINDER_LATE_WINDOW_HOURS（默认 24h），block_start 同窗口，overdue_check 为 fire_at + 24h，brief 为 fire_at + 2h。
@@ -81,10 +95,11 @@ id、user_id、kind（reminder | brief_morning | brief_evening | block_start | o
 ### llm_call（阶段 1）
 id、trace_id、user_id（可空）、alias、provider、model_id、params（jsonb）、request（jsonb）、response（jsonb）、input_tokens、cached_tokens、output_tokens、reasoning_tokens、latency_ms、ttft_ms（可空）、error、created_at
 
-### memory / memory_source / memory_decision_log（阶段 1 仅建表，阶段 3 实现）
-- memory：id、user_id、mission_id（可空）、type（slot | preference | episode | state_signal）、slot_key（可空）、subject、value（jsonb）、polarity、scope（jsonb）、source_class（confirmed | stated | inferred）、weight、confidence、status（active | superseded | retracted | pending）、supersedes_id、valid_from、valid_to、recorded_at、superseded_at、support_days、contradict_count、last_reinforced_at、rejected_at、suppress_until、extractor_version、embedding vector(1024)、embedding_model
+### memory / memory_source / memory_decision_log / memory_extraction_run（阶段 1 建表，阶段 3a 实现写入）
+- memory：id、user_id、mission_id（可空）、type（slot | preference | episode | state_signal）、slot_key（可空）、subject、value（jsonb，形状见变更 6）、polarity、scope（jsonb，形状见变更 6）、source_class（confirmed | stated | inferred）、weight、confidence、status（active | superseded | retracted | pending）、supersedes_id、valid_from、valid_to、recorded_at、superseded_at、support_days、contradict_count、last_reinforced_at、rejected_at、suppress_until、extractor_version、embedding vector(1024)、embedding_model
 - memory_source：memory_id、event_id（联合主键）
-- memory_decision_log：id、memory_id（可空）、candidate（jsonb）、neighbors（jsonb）、action（ADD | SUPERSEDE | NOOP | MERGE | ASK）、reason、alias、llm_call_id、created_at
+- memory_decision_log：id、【变更（阶段 3a）】user_id（FK user，NOT NULL）、【变更（阶段 3a）】run_id（FK memory_extraction_run，可空）、memory_id（可空）、candidate（jsonb，含 fingerprint）、neighbors（jsonb）、action（ADD | SUPERSEDE | NOOP | MERGE | ASK）、reason、alias、llm_call_id、created_at
+- memory_extraction_run（阶段 3a）：id、user_id、to_event_id、extractor_version、event_count、status（pending | done | failed）、stats（jsonb）、error、created_at、finished_at；唯一约束 (user_id, to_event_id, extractor_version)
 
 ### 任务专属记忆（阶段 4 再建）
 knowledge_node、question_log、qa_log、weakness、plan_version，均带 mission_id
@@ -103,7 +118,7 @@ Capabilities：can_push_unsolicited、push_credits、can_update_message、suppor
 入站幂等键（【变更（阶段 1 修订）】）：飞书优先使用事件 event_id，缺失时退回 message_id；其他渠道沿用渠道侧事件标识
 
 ### LLM 网关
-- aliases.yaml：别名 -> provider、model、params（reasoning_effort、max_tokens、timeout、temperature）、fallback 别名；【变更（阶段 2）】新增 brief_compose（仅写简报开场语，max_tokens=120、temperature=0.7、timeout=3）
+- aliases.yaml：别名 -> provider、model、params（reasoning_effort、max_tokens、timeout、temperature）、fallback 别名；【变更（阶段 2）】新增 brief_compose（仅写简报开场语，max_tokens=120、temperature=0.7、timeout=3）；【变更（阶段 3a）】新增 memory_resolve（temperature 0、max_tokens 512、timeout 30），memory_extract max_tokens 提到 2048
 - chat(alias, messages, tools=None, response_model=None) -> LLMResult
 - LLMResult：content、tool_calls、reasoning（单独存放，不混入 content）、usage（input、cached、output、reasoning）、model_id、latency_ms
 - 传入 response_model 时用 Pydantic 校验，失败则带错误信息重试，最多 2 次
@@ -112,13 +127,14 @@ Capabilities：can_push_unsolicited、push_credits、can_update_message、suppor
 
 ### 嵌入服务
 - embed(texts, kind) -> list[list[float]]，kind 为 query 或 document
-- query 使用任务指令前缀，document 不加
-- 配置项：EMBEDDING_BASE_URL、EMBEDDING_MODEL、EMBEDDING_DIM=1024
+- query 使用任务指令前缀，document 不加；阶段 3a 按 Qwen3-Embedding 模型卡：`Instruct: Given a user message, retrieve relevant memories about the user\nQuery:{query}`
+- 配置项：EMBEDDING_BASE_URL、EMBEDDING_MODEL、EMBEDDING_DIM=1024；阶段 3a 另增加 MEMORY_IDLE_MINUTES、MEMORY_BATCH_MAX_EVENTS、MEMORY_NEIGHBOR_THRESHOLD、MEMORY_NEIGHBOR_TOPK
 - 返回前先截断到 EMBEDDING_DIM，再做 L2 归一化
 
-### Friday 工具（阶段 1；【变更（阶段 1 修订）】幂等键派生方式变更并新增 set_timezone；【变更（阶段 2）】新增时段与偏好工具）
+### Friday 工具（阶段 1；【变更（阶段 1 修订）】幂等键派生方式变更并新增 set_timezone；【变更（阶段 2）】新增时段与偏好工具；【变更（阶段 3a）】新增 remember）
 create_task、list_tasks、complete_task、set_reminder、capture_note、set_timezone
 【变更（阶段 2）】schedule_block、list_schedule、update_block_status、reschedule_block、set_notif_prefs、list_reminders、cancel_reminder
+【变更（阶段 3a）】remember（type 允许 slot | preference | episode，state_signal 只能异步抽取；槽位冲突返回 pending_confirmation 并附旧值；证据绑定当前入站事件）
 - 参数用 Pydantic 定义；时间参数必须是带时区偏移的 ISO 8601
 - 写工具（create_task、complete_task、set_reminder、capture_note、set_timezone）不接受 LLM 提供的幂等键：由代码按入站事件派生，tool_call / tool_result 事件的 idempotency_key 形如 tool-call:{inbound_event_id}:{tool_name}:{call_index}（call_index 跨步骤递增）；幂等键写入与业务写入在同一事务
 - set_timezone：参数为 IANA 时区名；校验通过后更新 user.timezone 并 rev+1

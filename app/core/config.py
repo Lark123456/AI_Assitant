@@ -34,6 +34,14 @@ class Settings(BaseSettings):
     # 物化器运行间隔（秒）
     materialize_interval_seconds: float = 300.0
     trigger_lease_seconds: float = 300.0  # claimed 租约超时，超时后回收重试
+    # 阶段 3a：嵌入与记忆写入
+    embedding_base_url: str = "http://localhost:11434"
+    embedding_model: str = "qwen3-embedding:0.6b"
+    embedding_dim: int = 1024
+    memory_idle_minutes: float = 10.0
+    memory_batch_max_events: int = 40
+    memory_neighbor_threshold: float = 0.75
+    memory_neighbor_topk: int = 5
     log_level: str = "INFO"
 
 

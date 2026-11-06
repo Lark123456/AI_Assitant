@@ -21,8 +21,10 @@ from app.core.clock import Clock
 from app.core.config import Settings, get_settings
 from app.core.ids import new_trace_id
 from app.core.logging import get_logger, setup_logging
+from app.core.tasks import spawn
 from app.db.base import make_engine, make_sessionmaker
 from app.db.models import ChannelIdentity, TriggerInstance, User
+from app.embeddings.service import build_embedding_service
 from app.engine.events import append_event
 from app.engine.handlers import build_candidates
 from app.engine.materializer import get_or_create_prefs, run_materializer
@@ -41,6 +43,7 @@ from app.engine.triggers import (
 from app.llm.gateway import LLMGateway
 from app.llm.providers.base import BaseProvider
 from app.llm.providers.openai_compat import OpenAICompatProvider
+from app.memory.runs import memory_worker_loop
 
 logger = get_logger(__name__)
 
@@ -197,6 +200,10 @@ async def process_trigger(
         (o for o in outcomes if o.decision == "send" and not o.delivered), None
     )
     if failed is not None:
+        # 审计先行：失败尝试的 decision 与 delivery(error) 必须先提交，
+        # 之后的重试/回滚不能把它们抹掉；重试调度由 _record_failure 另开会话完成
+        await session.commit()
+        logger.warning("trigger delivery failed, audit committed: id=%s error=%s", trigger.id, failed.error)
         raise RuntimeError(f"trigger delivery failed: {failed.error}")
     if all(outcome.decision == "drop" for outcome in outcomes):
         trigger.status = "dropped"
@@ -313,6 +320,16 @@ async def run_worker() -> None:
         if reset:
             logger.info("startup: reset %d stale claimed triggers to pending", reset)
         await session.commit()
+
+    spawn(
+        memory_worker_loop(
+            sessionmaker,
+            gateway=gateway,
+            embedder=build_embedding_service(settings),
+            clock=clock,
+            settings=settings,
+        )
+    )
 
     last_materialized: dt.datetime | None = None
     while True:

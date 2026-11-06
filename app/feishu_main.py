@@ -31,6 +31,7 @@ from app.core.config import get_settings
 from app.core.logging import get_logger, setup_logging
 from app.core.tasks import spawn
 from app.db.base import make_engine, make_sessionmaker
+from app.embeddings.service import build_embedding_service
 from app.engine.pipeline import InboundPipeline
 from app.llm.gateway import LLMGateway
 from app.llm.providers.openai_compat import OpenAICompatProvider
@@ -85,6 +86,7 @@ def main() -> None:
         settings=settings,
         gateway=gateway,
         adapters={"feishu": feishu},
+        embedder=build_embedding_service(settings),
     )
     try:
         asyncio.run(_run(pipeline, feishu))

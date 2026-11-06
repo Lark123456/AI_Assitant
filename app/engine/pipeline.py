@@ -21,6 +21,7 @@ from app.core.config import Settings
 from app.core.ids import new_trace_id
 from app.core.logging import get_logger, log_context
 from app.db.models import EventLog, InboundProcessing, User
+from app.embeddings.service import EmbeddingService
 from app.engine.events import append_event
 from app.engine.users import get_or_create_user
 from app.llm.gateway import LLMGateway
@@ -54,11 +55,13 @@ class InboundPipeline:
         settings: Settings,
         gateway: LLMGateway,
         adapters: dict[str, ChannelAdapter],
+        embedder: EmbeddingService | None = None,
     ) -> None:
         self._sessionmaker = sessionmaker
         self._clock = clock
         self._settings = settings
         self._adapters = adapters
+        self._embedder = embedder
         self._friday = FridayAgent(gateway)
         self._allowed_open_ids = {
             x.strip() for x in settings.allowed_open_ids.split(",") if x.strip()
@@ -156,6 +159,7 @@ class InboundPipeline:
                         channel=ingested.event.channel,
                         source_event_id=ingested.event_id,
                         text=ingested.event.text,
+                        embedder=self._embedder,
                     )
                 except Exception:
                     # 故障兜底：回滚事务（丢弃半途写入），回复兜底文案而非沉默

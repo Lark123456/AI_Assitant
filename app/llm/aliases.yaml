@@ -16,7 +16,14 @@ memory_extract:
   provider: openai_compat
   model: ark-code-latest
   params:
-    max_tokens: 1024
+    max_tokens: 2048
+    temperature: 0.0
+    timeout: 30
+memory_resolve:
+  provider: openai_compat
+  model: ark-code-latest
+  params:
+    max_tokens: 512
     temperature: 0.0
     timeout: 30
 mini_plan:

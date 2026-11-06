@@ -12,6 +12,7 @@ from app.core.clock import Clock
 from app.core.config import Settings
 from app.core.logging import get_logger
 from app.db.models import User
+from app.embeddings.service import EmbeddingService
 from app.llm.gateway import BudgetExceededError, LLMGateway
 from app.llm.schemas import LLMResult
 from app.tools.base import ToolContext
@@ -41,6 +42,7 @@ class FridayAgent:
         channel: str,
         source_event_id: uuid.UUID | None,
         text: str,
+        embedder: EmbeddingService | None = None,
     ) -> str:
         """处理一条用户消息，返回回复文本。"""
         ctx = ToolContext(
@@ -51,6 +53,7 @@ class FridayAgent:
             trace_id=trace_id,
             channel=channel,
             source_event_id=source_event_id,
+            embedder=embedder,
         )
         messages: list[dict] = [
             {"role": "system", "content": build_system_prompt(clock, user.timezone)},

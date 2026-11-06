@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.clock import Clock
 from app.core.config import Settings
 from app.db.models import User
+from app.embeddings.service import EmbeddingService
 
 
 class ToolResult(BaseModel):
@@ -33,6 +34,7 @@ class ToolContext:
         trace_id: str,
         channel: str,
         source_event_id: uuid.UUID | None,
+        embedder: EmbeddingService | None = None,
     ) -> None:
         self.session = session
         self.clock = clock
@@ -41,6 +43,7 @@ class ToolContext:
         self.trace_id = trace_id
         self.channel = channel
         self.source_event_id = source_event_id
+        self.embedder = embedder
         # 当前工具调用在整条入站消息内的序号（跨步骤递增），用于派生幂等键
         self.call_index: int = 0
 

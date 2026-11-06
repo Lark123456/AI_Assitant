@@ -10,3 +10,15 @@ brief_compose:
   params:
     max_tokens: 32
     timeout: 3
+memory_extract:
+  provider: fake
+  model: fake-model
+  params:
+    max_tokens: 512
+    timeout: 5
+memory_resolve:
+  provider: fake
+  model: fake-model
+  params:
+    max_tokens: 128
+    timeout: 5

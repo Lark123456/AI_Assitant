@@ -26,6 +26,8 @@ from app.adapters.identity import make_identity_resolver
 from app.core.clock import UTC, FakeClock
 from app.core.config import Settings
 from app.db.base import make_engine, make_sessionmaker
+from app.embeddings.fake import FakeEmbeddingProvider
+from app.embeddings.service import EmbeddingService
 from app.engine.pipeline import InboundPipeline
 from app.llm.gateway import LLMGateway
 from app.llm.providers.base import BaseProvider
@@ -34,9 +36,9 @@ from app.llm.schemas import LLMResult
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 TEST_ALIASES = Path(__file__).parent / "fixtures" / "aliases_test.yaml"
 ALL_TABLES = (
-    "inbound_processing, memory_decision_log, memory_source, memory, llm_call, notif_prefs, "
-    "delivery, nudge_decision, nudge_candidate, trigger_instance, planned_block, work_item, "
-    "event_log, channel_identity, \"user\""
+    "memory_extraction_run, inbound_processing, memory_decision_log, memory_source, memory, "
+    "llm_call, notif_prefs, delivery, nudge_decision, nudge_candidate, trigger_instance, "
+    "planned_block, work_item, event_log, channel_identity, \"user\""
 )
 
 
@@ -167,8 +169,14 @@ def make_gateway(db, fake_clock):
 
 
 @pytest.fixture
-def make_pipeline(db, fake_clock, settings, make_gateway):
-    """构造注入了假 LLM 与 Console 渠道的完整管道。"""
+def fake_embedder() -> EmbeddingService:
+    """确定性的假嵌入（字符 bigram 特征哈希）。"""
+    return EmbeddingService(FakeEmbeddingProvider(1024), 1024)
+
+
+@pytest.fixture
+def make_pipeline(db, fake_clock, settings, make_gateway, fake_embedder):
+    """构造注入了假 LLM、假嵌入与 Console 渠道的完整管道。"""
 
     def _make(responder: Callable[[list[dict]], LLMResult], *, daily_limit: int = 0):
         gateway = make_gateway(responder, daily_limit=daily_limit)
@@ -179,6 +187,7 @@ def make_pipeline(db, fake_clock, settings, make_gateway):
             settings=settings,
             gateway=gateway,
             adapters={"console": console},
+            embedder=fake_embedder,
         )
         return pipeline, console
 

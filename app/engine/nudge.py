@@ -91,8 +91,13 @@ async def build_snapshot(
     clock: Clock,
     settings: Settings,
     dedupe_key: str | None,
+    candidate_id: uuid.UUID | None = None,
 ) -> UserStateSnapshot:
-    """预取仲裁所需的全部状态（本函数之外 evaluate 不再触库）。"""
+    """预取仲裁所需的全部状态（本函数之外 evaluate 不再触库）。
+
+    last_decision_at 只统计 send / merge，且排除当前候选自身：
+    defer/drop 是“这次没发成”的过程记录，不能反过来把同一候选锁死 24 小时。
+    """
     now = clock.now()
     start, end = day_window_utc(now, user.timezone, user.day_start)
 
@@ -132,14 +137,18 @@ async def build_snapshot(
 
     last_at: dt.datetime | None = None
     if dedupe_key:
+        filters = [
+            NudgeCandidate.user_id == user.id,
+            NudgeCandidate.dedupe_key == dedupe_key,
+            NudgeDecision.decision.in_(("send", "merge")),
+        ]
+        if candidate_id is not None:
+            filters.append(NudgeCandidate.id != candidate_id)
         last_at = (
             await session.execute(
                 select(func.max(NudgeDecision.decided_at))
                 .join(NudgeCandidate, NudgeDecision.candidate_id == NudgeCandidate.id)
-                .where(
-                    NudgeCandidate.user_id == user.id,
-                    NudgeCandidate.dedupe_key == dedupe_key,
-                )
+                .where(*filters)
             )
         ).scalar_one_or_none()
 
@@ -238,7 +247,7 @@ async def process_candidate(
     )
     snapshot = await build_snapshot(
         session, user=user, prefs=prefs, clock=clock, settings=settings,
-        dedupe_key=candidate.dedupe_key,
+        dedupe_key=candidate.dedupe_key, candidate_id=candidate.id,
     )
     decision: Decision = evaluate(view, snapshot)
     content_text: str | None = None

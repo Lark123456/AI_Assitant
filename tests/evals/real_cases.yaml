@@ -1,0 +1,5 @@
+# 真实对话补充用例（后续手工添加；格式与 memory_cases.yaml 相同）
+meta:
+  now: "2026-11-06T10:00:00+08:00"
+  tz: "Asia/Shanghai"
+cases: []
