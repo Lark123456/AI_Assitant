@@ -1,4 +1,4 @@
-"""Friday v0：手写 tool-use 循环，最多 3 步。"""
+"""Friday v0：手写 tool-use 循环，最多 4 步。"""
 
 import json
 import uuid
