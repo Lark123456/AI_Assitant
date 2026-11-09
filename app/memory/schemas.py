@@ -21,7 +21,8 @@ SENSITIVE_CATEGORIES: frozenset[str] = frozenset(
     {"health", "finance", "exact_location", "third_party", "credentials"}
 )
 TIME_SLOT_KEYS: frozenset[str] = frozenset(SLOT_KEYS - {"fixed_event"})
-ALLOWED_TYPES: frozenset[str] = frozenset({"slot", "preference", "episode", "state_signal"})
+# 抽取器只输出这三类；state_signal 仅保留数据库枚举，供历史数据使用
+ALLOWED_TYPES: frozenset[str] = frozenset({"slot", "preference", "episode"})
 SYNC_TYPES: frozenset[str] = frozenset({"slot", "preference", "episode"})
 TOOL_EVIDENCE_TOOLS: frozenset[str] = frozenset(
     {"schedule_block", "update_block_status", "reschedule_block", "set_notif_prefs"}
@@ -40,7 +41,7 @@ class ScopeSpec(BaseModel):
 
 
 class MemoryCandidate(BaseModel):
-    type: Literal["slot", "preference", "episode", "state_signal"]
+    type: Literal["slot", "preference", "episode"]
     slot_key: str | None = None
     subject: str = Field(min_length=1, max_length=200)
     value_text: str = Field(min_length=1, max_length=500)

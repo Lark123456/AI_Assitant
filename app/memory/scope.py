@@ -80,5 +80,19 @@ def normalize_scope(
     return None
 
 
+def scope_valid_to(scope: dict, tz: str) -> dt.datetime | None:
+    """on/until 的有效期终点：日期 D 的 D+2 天 00:00（用户本地时区，转 UTC）。"""
+    date_text = scope.get("date")
+    if not date_text:
+        return None
+    try:
+        day = dt.date.fromisoformat(str(date_text))
+    except ValueError:
+        return None
+    end_day = day + dt.timedelta(days=2)
+    local = dt.datetime.combine(end_day, dt.time.min, tzinfo=ZoneInfo(tz))
+    return local.astimezone(dt.UTC)
+
+
 def local_date_at(instant: dt.datetime, tz: str) -> dt.date:
     return instant.astimezone(ZoneInfo(tz)).date()

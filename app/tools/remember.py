@@ -67,6 +67,7 @@ async def _run_remember(ctx: ToolContext, args: dict) -> ToolResult:
         candidate=candidate,
         event_index=index,
         explicit_remember=True,
+        now=ctx.clock.now(),
     )
     if isinstance(validated, RejectedCandidate):
         return ToolResult(status="error", message=f"记忆候选被拒绝：{validated.reason}")

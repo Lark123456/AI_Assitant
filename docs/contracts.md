@@ -2,6 +2,15 @@
 
 ## 变更记录
 
+### 变更（阶段 3 修复 C：抽取器 v2）
+1. 抽取器输出 schema 移除 state_signal：MemoryCandidate.type 只允许 slot | preference | episode；数据库 CHECK 枚举保留 state_signal 供历史数据使用。
+2. EXTRACTOR_VERSION 升为 memory-extract-v2；提示词重写 episode 判定条件（必须有日期锚点，且偏离常规并影响时间/精力/可用性，或带日期的具体事件），并内嵌 6 条正例与 8 条反例（few-shot 单独维护，不得取自评测用例）。
+3. slot 的 scope 只能是 persistent | recurring，否则 rejected:slot_scope；episode 的 scope 必须是 on | until 且日期可解析，否则 rejected:episode_scope / rejected:scope_unparsed；episode confidence 低于 0.6 拒绝（rejected:episode_low_confidence）；每个 run 最多写入 5 条 episode，超出记 rejected:episode_cap。
+4. 12 小时制按槽位窗口确定性纠正为 24 小时制：wake 04:00–11:00、work_start 06:00–12:00、lunch 10:30–14:30、work_end 14:00–23:30、sleep 20:00–04:00；commute / energy_peak / fixed_event 不自动翻转；两种读法都合理或都不合理时保留原话。
+5. episode 的 valid_to：日期 D 的 D+2 天 00:00（用户本地时区转 UTC）；until 采用同一终点。valid_to 已早于当前时间的 episode 拒绝（rejected:episode_date_past），昨天这类仍在有效期内的接受。
+6. episode 去重（duplicate_open_fact）必须 subject、value、scope 全部相同；不同日期的同类事件视为独立事实。
+7. 敏感关键词兜底只检查候选项自身（subject、value_text、quote），不扫描整条事件文本，避免同批次中的敏感词误伤无关候选；命中时拒绝原因为 rejected:sensitive_keyword:{类别}:{命中词}；remember 同步路径不受兜底影响。
+
 ### 变更（阶段 3 修复 D：策略与评测口径）
 1. 敏感类别改为「异步抽取一律拒绝」：即使原话包含「记住」，异步路径也返回 rejected:sensitive；只有 remember 同步工具（explicit_remember=True）可写入。原「证据中出现明确记住意图即放行」作废。
 2. 新增 docs/memory-policy.md，定义记忆/非记忆边界：episode 必须有日期锚点且偏离常规并影响时间/精力/可用性；会议、出差、缴费、截止日期等可表达为任务或时间块的内容不算记忆。

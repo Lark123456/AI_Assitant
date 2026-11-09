@@ -1,6 +1,7 @@
 """run 重试/指针前移、pending 隔离、抑制与 LLM 降级。"""
 
 import datetime as dt
+import json
 import uuid
 
 from sqlalchemy import select
@@ -23,15 +24,17 @@ def _validated(**overrides) -> ValidatedCandidate:
         "value": {"text": "喜欢拿铁"},
         "scope": {"kind": "persistent"},
         "source_class": "stated",
+        "evidence_event_id": EVENT_ID,
     }
     data.update(overrides)
+    event_id = data["evidence_event_id"]
     return ValidatedCandidate(
         candidate=MemoryCandidate(
             type=data["type_"],  # type: ignore[arg-type]
             slot_key=data["slot_key"],
             subject=data["subject"],
             value_text=str(data["value"].get("text", "")),
-            evidence=[EvidenceItem(event_id=EVENT_ID, quote="我喜欢拿铁")],
+            evidence=[EvidenceItem(event_id=event_id, quote="我喜欢拿铁")],
             explicit=data["source_class"] == "stated",
         ),
         type=data["type_"],
@@ -43,7 +46,7 @@ def _validated(**overrides) -> ValidatedCandidate:
         explicit=data["source_class"] == "stated",
         confidence=0.9,
         sensitive_category=None,
-        evidence=(EvidenceItem(event_id=EVENT_ID, quote="我喜欢拿铁"),),
+        evidence=(EvidenceItem(event_id=event_id, quote="我喜欢拿铁"),),
         evidence_dates=(dt.date(2026, 1, 1),),
         fingerprint="fp",
     )
@@ -187,6 +190,122 @@ async def test_suppressed_topic_writes_nothing(
         logs = (await session.execute(select(MemoryDecisionLog))).scalars().all()
     assert len(memories) == 1
     assert len(logs) == 1 and logs[0].reason == "suppressed"
+
+
+def _add_responder(messages: list[dict]) -> LLMResult:
+    return LLMResult(
+        content=json.dumps({"action": "ADD", "target_id": None, "reason": "episode"})
+    )
+
+
+async def test_episode_writes_valid_to_two_days_after_scope_date(
+    db, fake_clock, settings, make_gateway, fake_embedder
+) -> None:
+    user, event = await _seed_event(db, fake_clock, "今天加班到九点", minutes_ago=5)
+    gateway = make_gateway(_add_responder)
+    candidate = _validated(
+        type_="episode",
+        subject="加班",
+        value={"text": "加班到九点"},
+        scope={"kind": "on", "date": "2026-11-06"},
+        evidence_event_id=event.id,
+    )
+    async with db() as session:
+        outcome = await process_candidate(
+            session, user=user, candidate=candidate, run_id=None,
+            extractor_version="memory-extract-v2", gateway=gateway, embedder=fake_embedder,
+            clock=fake_clock, settings=settings, trace_id="episode-valid-to",
+        )
+        await session.commit()
+        assert outcome.decision == "ADD"
+        memory = await session.get(Memory, outcome.memory_id)
+
+    assert memory is not None
+    assert memory.valid_to == dt.datetime(2026, 11, 7, 16, 0, tzinfo=dt.UTC)
+
+
+async def test_episode_does_not_create_slot_pending(
+    db, fake_clock, settings, make_gateway, fake_embedder
+) -> None:
+    user, event = await _seed_event(db, fake_clock, "今天加班到九点", minutes_ago=5)
+    gateway = make_gateway(_add_responder)
+    async with db() as session:
+        session.add(
+            Memory(
+                user_id=user.id, type="slot", slot_key="work_end", subject="下班时间",
+                value={"text": "6点", "time": "18:00"}, scope={"kind": "persistent"},
+                source_class="stated", weight=0.8, confidence=0.9, status="active",
+                recorded_at=fake_clock.now(), support_days=1, contradict_count=0,
+            )
+        )
+        await session.commit()
+
+    candidate = _validated(
+        type_="episode",
+        subject="加班",
+        value={"text": "加班到九点"},
+        scope={"kind": "on", "date": "2026-11-06"},
+        evidence_event_id=event.id,
+    )
+    async with db() as session:
+        outcome = await process_candidate(
+            session, user=user, candidate=candidate, run_id=None,
+            extractor_version="memory-extract-v2", gateway=gateway, embedder=fake_embedder,
+            clock=fake_clock, settings=settings, trace_id="episode-no-slot",
+        )
+        await session.commit()
+
+    assert outcome.decision == "ADD"
+    async with db() as session:
+        memories = (await session.execute(select(Memory))).scalars().all()
+    assert not any(memory.status == "pending" for memory in memories)
+    assert all(memory.type != "slot" or memory.slot_key != "work_end" or memory.status == "active"
+               for memory in memories)
+
+
+async def test_episode_cap_rejects_sixth_episode(
+    db, fake_clock, settings, make_gateway, fake_embedder
+) -> None:
+    user, event = await _seed_event(db, fake_clock, "今天加班到十点", minutes_ago=15)
+    candidates = [
+        {
+            "type": "episode",
+            "slot_key": None,
+            "subject": f"加班{i}",
+            "value_text": f"加班到十点{i}",
+            "time_text": None,
+            "scope": {"kind": "on", "date_text": "今天", "rule": None},
+            "explicit": True,
+            "confidence": 0.9,
+            "sensitive_category": None,
+            "evidence": [
+                {"event_id": str(event.id), "quote": "今天加班到十点"}
+            ],
+        }
+        for i in range(6)
+    ]
+
+    def responder(messages: list[dict]) -> LLMResult:
+        if "记忆裁决器" in str(messages[0].get("content", "")):
+            return LLMResult(content=json.dumps({"action": "ADD", "target_id": None, "reason": "add"}))
+        return LLMResult(content=json.dumps({"candidates": candidates}, ensure_ascii=False))
+
+    gateway = make_gateway(responder)
+    assert await schedule_runs(db, clock=fake_clock, settings=settings) == 1
+    run = await claim_due_run(db, now=fake_clock.now())
+    assert run is not None
+    assert await process_run(
+        db, run.id, gateway=gateway, embedder=fake_embedder, clock=fake_clock, settings=settings
+    )
+    async with db() as session:
+        memories = (await session.execute(select(Memory))).scalars().all()
+        logs = (await session.execute(select(MemoryDecisionLog))).scalars().all()
+        stored_run = await session.get(MemoryExtractionRun, run.id)
+    assert len([memory for memory in memories if memory.type == "episode"]) == 5
+    assert not any(memory.subject == "加班5" for memory in memories)
+    assert any(log.reason == "rejected:episode_cap" for log in logs)
+    assert stored_run is not None
+    assert stored_run.stats["rejected"]["rejected:episode_cap"] == 1
 
 
 async def test_llm_resolve_failure_degrades_to_noop(

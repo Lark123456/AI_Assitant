@@ -100,6 +100,55 @@ def test_episode_scope_never_compares_against_persistent_slot() -> None:
     assert decision.action == "ADD"
 
 
+def test_same_episode_same_day_is_duplicate() -> None:
+    decision = resolve_rules(
+        _candidate(
+            type_="episode",
+            slot_key=None,
+            subject="加班",
+            value={"text": "加班到九点"},
+            scope={"kind": "on", "date": "2026-11-06"},
+        ),
+        [
+            _neighbor(
+                type="episode",
+                slot_key=None,
+                subject="加班",
+                value={"text": "加班到九点"},
+                scope={"kind": "on", "date": "2026-11-06"},
+            )
+        ],
+        now=NOW,
+        threshold=THRESHOLD,
+    )
+    assert decision.action == "NOOP"
+    assert decision.reason == "duplicate_open_fact"
+
+
+def test_same_episode_different_day_is_not_duplicate() -> None:
+    decision = resolve_rules(
+        _candidate(
+            type_="episode",
+            slot_key=None,
+            subject="加班",
+            value={"text": "加班到九点"},
+            scope={"kind": "on", "date": "2026-11-06"},
+        ),
+        [
+            _neighbor(
+                type="episode",
+                slot_key=None,
+                subject="加班",
+                value={"text": "加班到九点"},
+                scope={"kind": "on", "date": "2026-11-05"},
+            )
+        ],
+        now=NOW,
+        threshold=THRESHOLD,
+    )
+    assert decision.action == "NEEDS_LLM"
+
+
 def test_suppressed_topic_noops() -> None:
     decision = resolve_rules(
         _candidate(),

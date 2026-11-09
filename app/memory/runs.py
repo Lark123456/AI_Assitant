@@ -40,6 +40,7 @@ from app.memory.validate import (
 logger = get_logger(__name__)
 
 MAX_RETRIES = 3  # 首次 + 3 次重试 = 最多 4 次尝试
+MAX_EPISODES_PER_RUN = 5  # 单个 run 最多写入的 episode 数
 RETRY_BASE_SECONDS = 30.0
 RETRY_MAX_SECONDS = 120.0
 
@@ -410,6 +411,7 @@ async def process_run(
         return False
 
     stats = RunStats(events=len(index), candidates=len(extracted.candidates))
+    episode_count = 0
     for candidate in extracted.candidates:
         raw_fp = compute_fingerprint(candidate.model_dump(mode="json"))
         async with sessionmaker() as session:
@@ -427,7 +429,7 @@ async def process_run(
                 continue
 
             validated = validate_candidate(
-                user=user, candidate=candidate, event_index=index
+                user=user, candidate=candidate, event_index=index, now=clock.now()
             )
             if isinstance(validated, RejectedCandidate):
                 session.add(
@@ -452,6 +454,32 @@ async def process_run(
                 )
                 await session.commit()
                 continue
+
+            if validated.type == "episode":
+                if episode_count >= MAX_EPISODES_PER_RUN:
+                    session.add(
+                        MemoryDecisionLog(
+                            user_id=user.id,
+                            run_id=run_id,
+                            memory_id=None,
+                            candidate={
+                                "raw": candidate.model_dump(mode="json"),
+                                "raw_fingerprint": raw_fp,
+                            },
+                            neighbors=None,
+                            action="NOOP",
+                            reason="rejected:episode_cap",
+                            alias=None,
+                            llm_call_id=None,
+                            created_at=clock.now(),
+                        )
+                    )
+                    stats.rejected["rejected:episode_cap"] = (
+                        stats.rejected.get("rejected:episode_cap", 0) + 1
+                    )
+                    await session.commit()
+                    continue
+                episode_count += 1
 
             outcome = await process_candidate(
                 session,

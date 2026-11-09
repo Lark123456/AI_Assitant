@@ -94,8 +94,12 @@ def resolve_rules(
         if neighbor.type == candidate.type and neighbor.status == "active"
     ]
     for neighbor in same_type:
-        if _canonical_subject_value(neighbor) == _canonical_subject_value_dict(candidate):
-            return RuleDecision("NOOP", "duplicate_open_fact", neighbor.id)
+        if _canonical_subject_value(neighbor) != _canonical_subject_value_dict(candidate):
+            continue
+        # episode 只在同一日期范围内视为重复；不同日期的同类事件是独立事实
+        if candidate.type == "episode" and not scope_equal(neighbor.scope, candidate.scope):
+            continue
+        return RuleDecision("NOOP", "duplicate_open_fact", neighbor.id)
 
     similar = [
         neighbor

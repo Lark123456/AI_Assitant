@@ -32,6 +32,7 @@ from app.memory.resolve import (
     resolve_rules,
     resolve_with_llm,
 )
+from app.memory.scope import scope_valid_to
 from app.memory.validate import ValidatedCandidate
 from app.memory.weights import (
     contradicted_weight,
@@ -208,6 +209,9 @@ def _new_memory(
         initial_weight(candidate.source_class) + 0.1 * max(0, distinct - 1),
         max_weight(candidate.source_class),
     )
+    valid_to = (
+        scope_valid_to(candidate.scope, user.timezone) if candidate.type == "episode" else None
+    )
     return Memory(
         user_id=user.id,
         type=candidate.type,
@@ -222,6 +226,7 @@ def _new_memory(
         status=status,
         supersedes_id=supersedes_id,
         valid_from=clock.now(),
+        valid_to=valid_to,
         recorded_at=clock.now(),
         support_days=distinct,
         contradict_count=0,

@@ -153,7 +153,7 @@ async def test_extraction_writes_memory_and_rejections(
     assert slot.value == {"text": "7点", "time": "07:00"}
     assert slot.source_class == "stated"
     assert slot.embedding is not None and slot.embedding_model == "fake-hash-1024"
-    assert slot.extractor_version == "memory-extract-v1"
+    assert slot.extractor_version == "memory-extract-v2"
     assert len(sources) == 2  # 每条记忆一个证据事件
 
     reasons = {log.reason for log in logs if log.action == "NOOP"}
