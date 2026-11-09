@@ -138,6 +138,25 @@ async def test_remember_episode_is_allowed(db, fake_clock, settings, fake_embedd
     assert memory.scope == {"kind": "on", "date": "2026-01-01"}
 
 
+async def test_remember_sensitive_fact_is_written(
+    db, fake_clock, settings, fake_embedder
+) -> None:
+    user, event = await _seed_event(db, fake_clock, "记住我有糖尿病")
+    result = await _remember(
+        db, fake_clock, settings, user, event,
+        {
+            "type": "preference", "subject": "身体状况", "value": "有糖尿病",
+            "evidence_quote": "记住我有糖尿病",
+        },
+        fake_embedder,
+    )
+    assert result.status == "ok"
+    async with db() as session:
+        memory = (await session.execute(select(Memory))).scalar_one()
+    assert memory.type == "preference"
+    assert memory.value["text"] == "有糖尿病"
+
+
 async def test_state_signal_is_rejected_by_tool_schema(
     db, fake_clock, settings, fake_embedder
 ) -> None:

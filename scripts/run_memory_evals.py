@@ -91,6 +91,19 @@ def _git_state() -> tuple[str | None, bool | None]:
         return None, None
 
 
+def _resolve_git_state(override_sha: str | None, override_dirty: bool) -> tuple[str, bool]:
+    """git 不可用时必须显式指定 --git-sha；避免记录空的溯源信息。"""
+    if override_sha:
+        return override_sha, override_dirty
+    sha, dirty = _git_state()
+    if sha is None or dirty is None:
+        raise SystemExit(
+            "无法获取 git_sha/dirty：当前环境没有可用的 git。"
+            "请在仓库内运行，或用 --git-sha 显式指定提交（可加 --git-dirty 标记未提交改动）。"
+        )
+    return sha, dirty
+
+
 def _check_scope_kinds(case: dict) -> None:
     """scope_kind 必须是字符串：YAML 会把裸 on/off 解析成布尔值。"""
     for section in ("expect", "seed"):
@@ -352,6 +365,9 @@ def _score(cases: list[dict], results: list[dict | None]) -> dict:
     reject_by_category: dict[str, dict[str, int]] = defaultdict(
         lambda: {"checked": 0, "correct": 0}
     )
+    write_by_category: dict[str, dict[str, int]] = defaultdict(
+        lambda: {"cases": 0, "written": 0}
+    )
     failures: list[dict] = []
     errored_cases = 0
 
@@ -373,6 +389,10 @@ def _score(cases: list[dict], results: list[dict | None]) -> dict:
         expected = case.get("expect") or []
         actual = result.get("written") or []
         written_total += len(actual)
+        category = case.get("category")
+        if category:
+            write_by_category[str(category)]["cases"] += 1
+            write_by_category[str(category)]["written"] += len(actual)
         used: set[int] = set()
         missing: list[dict] = []
         for want in expected:
@@ -486,6 +506,9 @@ def _score(cases: list[dict], results: list[dict | None]) -> dict:
             }
             for key, value in reject_by_category.items()
         },
+        "write_by_category": {
+            key: dict(value) for key, value in write_by_category.items()
+        },
         "counts": {
             "tp": tp,
             "fp": fp,
@@ -549,6 +572,7 @@ def _print_metrics(metrics: dict) -> None:
         print(f"  {key}: {metrics[key]}")
     print(f"  by_type: {metrics['by_type']}")
     print(f"  reject_accuracy_by_category: {metrics['reject_accuracy_by_category']}")
+    print(f"  write_by_category: {metrics['write_by_category']}")
     print(f"  resolve_confusion: {metrics['resolve_confusion']}")
     print(f"  counts: {metrics['counts']}")
     print(f"  失败用例: {len(metrics['failures'])}")
@@ -643,7 +667,7 @@ async def main_async(
                 .distinct()
             )
         ).all() if eval_user_ids else []
-    git_sha, dirty = _git_state()
+    git_sha, dirty = _resolve_git_state(args.git_sha, args.git_dirty)
     metrics["models"] = [{"alias": alias, "model_id": model_id} for alias, model_id in model_rows]
     metrics["embedding_model"] = embedder.model_name
     metrics["extractor_version"] = EXTRACTOR_VERSION
@@ -682,6 +706,10 @@ def main() -> None:
     parser.add_argument(
         "--results", default=str(RESULTS_PATH), help="指标追加文件（默认 tests/evals/results.jsonl）"
     )
+    parser.add_argument("--git-sha", default=None, help="无 git 环境时显式指定提交 sha")
+    parser.add_argument(
+        "--git-dirty", action="store_true", help="配合 --git-sha 标记工作区有未提交改动"
+    )
     parser.add_argument(
         "--score-from", default=None, metavar="RAW", help="只按已有原始输出重新计分"
     )
@@ -712,7 +740,7 @@ def main() -> None:
         metrics = _score(scored_cases, results)
         metrics["cases_planned"] = len(cases)
         metrics["cases_scored"] = len(scored_cases)
-        git_sha, dirty = _git_state()
+        git_sha, dirty = _resolve_git_state(args.git_sha, args.git_dirty)
         metrics["extractor_version"] = EXTRACTOR_VERSION
         metrics["harness_version"] = HARNESS_VERSION
         metrics["case_file"] = cases_path.name

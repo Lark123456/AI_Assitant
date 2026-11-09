@@ -114,7 +114,7 @@ def test_slot_time_unparsed_is_rejected() -> None:
     assert validated.reason == "rejected:slot_time_unparsed"
 
 
-def test_sensitive_requires_remember_intent() -> None:
+def test_sensitive_rejected_in_async_even_with_remember_words() -> None:
     validated = validate_candidate(
         user=USER,
         candidate=_candidate(
@@ -124,13 +124,15 @@ def test_sensitive_requires_remember_intent() -> None:
             subject="身体状况",
             value_text="有糖尿病",
             sensitive_category="health",
-            evidence=[EvidenceItem(event_id=EVENT_ID, quote="我有糖尿病")],
+            evidence=[EvidenceItem(event_id=EVENT_ID, quote="记住我有糖尿病")],
         ),
-        event_index=_index("我有糖尿病"),
+        event_index=_index("记住我有糖尿病"),
     )
     assert isinstance(validated, RejectedCandidate)
     assert validated.reason == "rejected:sensitive"
 
+
+def test_sensitive_allowed_with_explicit_remember_flag() -> None:
     allowed = validate_candidate(
         user=USER,
         candidate=_candidate(
@@ -143,6 +145,7 @@ def test_sensitive_requires_remember_intent() -> None:
             evidence=[EvidenceItem(event_id=EVENT_ID, quote="记住我有糖尿病")],
         ),
         event_index=_index("记住我有糖尿病"),
+        explicit_remember=True,
     )
     assert not isinstance(allowed, RejectedCandidate)
 

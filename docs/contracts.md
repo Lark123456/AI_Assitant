@@ -2,6 +2,13 @@
 
 ## 变更记录
 
+### 变更（阶段 3 修复 D：策略与评测口径）
+1. 敏感类别改为「异步抽取一律拒绝」：即使原话包含「记住」，异步路径也返回 rejected:sensitive；只有 remember 同步工具（explicit_remember=True）可写入。原「证据中出现明确记住意图即放行」作废。
+2. 新增 docs/memory-policy.md，定义记忆/非记忆边界：episode 必须有日期锚点且偏离常规并影响时间/精力/可用性；会议、出差、缴费、截止日期等可表达为任务或时间块的内容不算记忆。
+3. 评测用例调整：r01/r02/r03/r06/r07/r08 期望为空；r05 期望 rejected:sensitive；y01/y03/y05/y07 期望为空并标记 category=sensitive_explicit；新增 j04–j07 无语境槽位用例、14 条低价值/假设/疑问/转述负例、3 条过去日期用例（b01/b03 有效期内接受，b02 期望 rejected:episode_date_past）。
+4. 评测新增 category 分类写入统计（injection / sensitive / sensitive_explicit / past，目标写入为 0）与 expect_rejected / reject_prefix 断言；结果新增 write_by_category。
+5. 评测溯源：拿不到 git_sha 或 dirty 时必须退出，可用 --git-sha / --git-dirty 显式指定；v1 基线记录已补录 git_sha=ea730d6、dirty=false 并注明基于独立 worktree。
+
 ### 变更（阶段 3a）
 1. 新表 memory_extraction_run：id、user_id（FK user）、to_event_id（FK event_log）、extractor_version、event_count、status（pending | done | failed）、stats（jsonb，含 attempts / next_attempt_at / 计数）、error、created_at、finished_at；唯一约束 (user_id, to_event_id, extractor_version)。
 2. memory_decision_log 新增 user_id（FK user，NOT NULL）、run_id（FK memory_extraction_run，可空）；迁移前按 memory_id → memory.user_id 回填，剩余无法归属的存量测试行删除并记录警告，之后才加 NOT NULL。
@@ -12,7 +19,7 @@
 7. 证据规则：用户消息取 payload.text；tool_result 只能引用「成功工具调用的已验证参数快照」的确定性还原文本（schedule_block 取标题/开始/结束；update_block_status 取块与状态；reschedule_block 取块/开始/结束；set_notif_prefs 取非空参数），禁止使用 payload.message（人话文案）。证据片段按忽略空白差异逐字回查。
 8. 抽取 run 重试：单个 run 失败最多自动重试 3 次（共 4 次尝试），退避 30/60/120 秒，尝试次数与下次时间记录在 stats；4 次仍失败置 failed 并写错误日志，调度指针前移，不阻塞后续事件。同一 run 重试时，已处理过的候选按「run_id + 候选指纹」识别，直接跳过，不再重复写决策日志。
 9. 开放事实的向量近邻只在 active 记忆中检索，pending 记忆不进入近邻候选。
-10. 敏感类别：health | finance | exact_location | third_party | credentials；默认拒绝，只有证据中出现明确「记住」意图或走 remember 同步工具时放行。
+10. 敏感类别：health | finance | exact_location | third_party | credentials；默认拒绝。异步抽取一律拒绝（即使原话含「记住」），只有 remember 同步工具（explicit_remember=True）放行（阶段 3 修复 D 调整）。
 11. remember 工具允许同步写入 slot、preference、episode；state_signal 只允许异步抽取。槽位冲突返回 pending_confirmation 并附旧值，不静默覆盖。
 12. 阶段 3a 不写 source_class=confirmed；该值留给阶段 3b 用户确认后升级。
 

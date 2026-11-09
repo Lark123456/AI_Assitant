@@ -27,8 +27,6 @@ from app.memory.text import (
 )
 from app.memory.timeparse import parse_time_text
 
-REMEMBER_INTENT_KEYWORDS = ("记住", "记一下", "记下", "帮我记", "别忘了", "牢记")
-
 
 @dataclass(frozen=True)
 class EventRecord:
@@ -111,10 +109,6 @@ async def build_event_index(
     return index
 
 
-def _remember_intent(texts: list[str]) -> bool:
-    return any(keyword in text for text in texts for keyword in REMEMBER_INTENT_KEYWORDS)
-
-
 def compute_fingerprint(payload: dict) -> str:
     """候选的确定性指纹（重试去重用）。"""
     canonical = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
@@ -133,7 +127,6 @@ def validate_candidate(
 ) -> ValidatedCandidate | RejectedCandidate:
     """校验单个候选；拒绝原因稳定可审计。"""
     evidences = list(candidate.evidence)
-    texts: list[str] = []
     dates: list[dt.date] = []
     for item in evidences:
         record = event_index.get(item.event_id)
@@ -141,7 +134,6 @@ def validate_candidate(
             return RejectedCandidate(candidate, "rejected:evidence_not_in_batch")
         if not quote_matches(item.quote, record.text):
             return RejectedCandidate(candidate, "rejected:evidence_not_found")
-        texts.append(record.text)
         dates.append(local_date_of(record.occurred_at, user.timezone, user.day_start))
 
     if not any(event_index[item.event_id].source == "user" for item in evidences):
@@ -151,7 +143,8 @@ def validate_candidate(
     if candidate.sensitive_category is not None:
         if candidate.sensitive_category not in SENSITIVE_CATEGORIES:
             return RejectedCandidate(candidate, "rejected:sensitive_unknown")
-        if not explicit_remember and not _remember_intent(texts):
+        # 异步抽取一律拒绝敏感类别；只有 remember 同步工具（explicit_remember）可写入
+        if not explicit_remember:
             return RejectedCandidate(candidate, "rejected:sensitive")
 
     type_ = candidate.type
