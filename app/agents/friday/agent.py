@@ -1,6 +1,7 @@
 """Friday v0：手写 tool-use 循环，最多 4 步。"""
 
 import json
+import time
 import uuid
 
 from pydantic import BaseModel
@@ -16,7 +17,13 @@ from app.embeddings.service import EmbeddingService
 from app.engine.events import append_event
 from app.llm.gateway import BudgetExceededError, LLMGateway
 from app.llm.schemas import LLMResult
-from app.memory.retrieve import MemoryContext, render_memory_block, retrieve_memory_context
+from app.memory.retrieve import (
+    RETRIEVAL_VERSION,
+    MemoryContext,
+    RenderedBlock,
+    render_memory_block,
+    retrieve_memory_context,
+)
 from app.tools.base import ToolContext
 from app.tools.registry import execute_tool, tool_schemas
 
@@ -57,44 +64,60 @@ class FridayAgent:
             source_event_id=source_event_id,
             embedder=embedder,
         )
-        memory_block = ""
-        if settings.memory_inject_enabled:
-            context = await retrieve_memory_context(
-                session,
-                user=user,
-                query=text,
-                embedder=embedder,
-                settings=settings,
-                clock=clock,
-            )
-            memory_block = render_memory_block(
-                context,
-                max_chars=settings.memory_inject_max_chars,
-                item_max_chars=settings.memory_inject_item_max_chars,
-            )
-            await _audit_memory_context(
-                session,
-                user=user,
-                channel=channel,
-                trace_id=trace_id,
-                source_event_id=source_event_id,
-                context=context,
-                block_chars=len(memory_block),
-                clock=clock,
-                query=text,
-            )
-        messages: list[dict] = [
-            {
-                "role": "system",
-                "content": build_system_prompt(clock, user.timezone, memory_block),
-            },
-        ]
+        # 先读历史，再用「当前消息 + 最近最多 4 条用户消息」构造检索查询；
+        # 助手回复只用于对话上下文，不作为用户事实参与检索。
         history = await build_history(
             session,
             user_id=user.id,
             exclude_event_id=source_event_id,
             clock=clock,
         )
+        query = build_retrieval_query(history, text)
+
+        started = time.perf_counter()
+        if settings.memory_inject_enabled:
+            context = await retrieve_memory_context(
+                session,
+                user=user,
+                query=query,
+                embedder=embedder,
+                settings=settings,
+                clock=clock,
+            )
+            rendered = render_memory_block(
+                context,
+                max_chars=settings.memory_inject_max_chars,
+                item_max_chars=settings.memory_inject_item_max_chars,
+            )
+        else:
+            context = MemoryContext()
+            rendered = RenderedBlock(text="", items=())
+        duration_ms = int((time.perf_counter() - started) * 1000)
+
+        model_name = embedder.model_name if embedder is not None else settings.embedding_model
+        await _audit_memory_context(
+            session,
+            user=user,
+            channel=channel,
+            trace_id=trace_id,
+            source_event_id=source_event_id,
+            context=context,
+            rendered=rendered,
+            duration_ms=duration_ms,
+            enabled=settings.memory_inject_enabled,
+            embedding_model=model_name,
+            clock=clock,
+            query=query,
+        )
+        # 审计先于 LLM 调用持久化：后续失败回滚不会丢掉本轮检索记录
+        await session.commit()
+
+        messages: list[dict] = [
+            {
+                "role": "system",
+                "content": build_system_prompt(clock, user.timezone, rendered.text),
+            },
+        ]
         messages.extend(history)
         messages.append({"role": "user", "content": text})
         last_content = ""
@@ -126,6 +149,17 @@ class FridayAgent:
         return last_content or "抱歉，这轮操作步骤太多了，请换个说法再试一次。"
 
 
+def build_retrieval_query(history: list[dict], text: str) -> str:
+    """当前消息 + 最近最多 4 条用户消息；助手回复不参与。"""
+    user_texts = [
+        str(message.get("content", ""))
+        for message in history
+        if message.get("role") == "user"
+    ]
+    parts = [*user_texts[-4:], text]
+    return "\n".join(part.strip() for part in parts if part.strip())
+
+
 async def _audit_memory_context(
     session: AsyncSession,
     *,
@@ -134,14 +168,15 @@ async def _audit_memory_context(
     trace_id: str,
     source_event_id: uuid.UUID | None,
     context: MemoryContext,
-    block_chars: int,
+    rendered: RenderedBlock,
+    duration_ms: int,
+    enabled: bool,
+    embedding_model: str,
     clock: Clock,
     query: str,
 ) -> None:
-    """把本轮注入的记忆写入 event_log；空注入且未降级时不写，避免噪音。"""
-    if context.is_empty and not context.degraded:
-        return
-    items = (*context.slots, *context.preferences, *context.episodes)
+    """每轮都写审计；只记录真正进入 Prompt 的记忆。"""
+    items = rendered.items
     await append_event(
         session,
         user_id=user.id,
@@ -149,8 +184,17 @@ async def _audit_memory_context(
         direction="system",
         type="memory_context",
         payload={
-            "query": query[:200],
-            "memory_ids": context.memory_ids(),
+            "retrieval_version": RETRIEVAL_VERSION,
+            "source_event_id": str(source_event_id) if source_event_id else None,
+            "enabled": enabled,
+            "query": query[:500],
+            "memory_ids": rendered.memory_ids,
+            "similarities": {
+                str(item.id): None
+                if item.similarity is None
+                else round(item.similarity, 4)
+                for item in items
+            },
             "items": [
                 {
                     "id": str(item.id),
@@ -163,9 +207,15 @@ async def _audit_memory_context(
                 }
                 for item in items
             ],
+            "result_count": len(items),
+            "retrieved_count": len(
+                (*context.slots, *context.preferences, *context.episodes)
+            ),
+            "duration_ms": duration_ms,
             "degraded": context.degraded,
             "degraded_reason": context.degraded_reason,
-            "block_chars": block_chars,
+            "embedding_model": embedding_model,
+            "block_chars": len(rendered.text),
         },
         trace_id=trace_id,
         clock=clock,

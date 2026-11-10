@@ -40,6 +40,7 @@ async def _add_memory(
     embedding_model: str | None = None,
     status: str = "active",
     scope: dict | None = None,
+    valid_from: dt.datetime | None = None,
     valid_to: dt.datetime | None = None,
     slot_key: str | None = None,
     source_class: str = "stated",
@@ -68,6 +69,7 @@ async def _add_memory(
             last_reinforced_at=now,
             embedding=embedding,
             embedding_model=model,
+            valid_from=valid_from,
             valid_to=valid_to,
         )
         session.add(memory)
@@ -180,6 +182,90 @@ async def test_min_similarity_filters_unrelated_memories(
             settings=strict, clock=fake_clock,
         )
     assert context.preferences == ()
+
+
+async def test_duplicate_slot_key_keeps_only_latest(
+    db, fake_clock: FakeClock, settings: Settings, fake_embedder: EmbeddingService
+) -> None:
+    user = await _user(db)
+    now = fake_clock.now()
+    await _add_memory(
+        db, fake_embedder, user, type_="slot", slot_key="wake", subject="起床时间",
+        text="6点", embedding_text=None, now=now - dt.timedelta(hours=2),
+    )
+    latest_id = await _add_memory(
+        db, fake_embedder, user, type_="slot", slot_key="wake", subject="起床时间",
+        text="7点", embedding_text=None, now=now,
+    )
+
+    async with db() as session:
+        context = await retrieve_memory_context(
+            session, user=user, query="几点起床", embedder=fake_embedder,
+            settings=_relaxed(settings), clock=fake_clock,
+        )
+    assert len(context.slots) == 1
+    assert context.slots[0].id == latest_id
+    assert context.slots[0].value["text"] == "7点"
+
+
+async def test_preference_validity_and_scope_are_filtered(
+    db, fake_clock: FakeClock, settings: Settings, fake_embedder: EmbeddingService
+) -> None:
+    user = await _user(db)
+    now = fake_clock.now()
+    active_id = await _add_memory(db, fake_embedder, user, now=now)
+    expired_id = await _add_memory(
+        db, fake_embedder, user, text="喜欢摩卡", valid_to=now - dt.timedelta(minutes=1), now=now
+    )
+    future_id = await _add_memory(
+        db, fake_embedder, user, text="喜欢拿铁", valid_from=now + dt.timedelta(hours=1), now=now
+    )
+    stale_scope_id = await _add_memory(
+        db, fake_embedder, user, text="喜欢冷萃",
+        scope={"kind": "on", "date": "2025-12-20"}, now=now,
+    )
+    current_scope_id = await _add_memory(
+        db, fake_embedder, user, text="喜欢澳白",
+        scope={"kind": "on", "date": "2026-01-01"}, now=now,
+    )
+
+    async with db() as session:
+        context = await retrieve_memory_context(
+            session, user=user, query="咖啡", embedder=fake_embedder,
+            settings=_relaxed(settings), clock=fake_clock,
+        )
+    ids = set(context.memory_ids())
+    assert str(active_id) in ids
+    assert str(current_scope_id) in ids
+    assert str(expired_id) not in ids
+    assert str(future_id) not in ids
+    assert str(stale_scope_id) not in ids
+
+
+async def test_preferences_and_episodes_share_one_topk_budget(
+    db, fake_clock: FakeClock, settings: Settings, fake_embedder: EmbeddingService
+) -> None:
+    user = await _user(db)
+    now = fake_clock.now()
+    for index in range(8):
+        await _add_memory(db, fake_embedder, user, subject=f"偏好{index}", text=f"喜欢饮品{index}", now=now)
+    for index in range(5):
+        await _add_memory(
+            db, fake_embedder, user, type_="episode", subject=f"加班{index}",
+            text=f"加班到九点{index}", scope={"kind": "on", "date": "2026-01-01"},
+            valid_to=now + dt.timedelta(days=10), now=now,
+        )
+    bounded = settings.model_copy(
+        update={"memory_inject_min_similarity": 0.0, "memory_inject_topk": 6}
+    )
+
+    async with db() as session:
+        context = await retrieve_memory_context(
+            session, user=user, query="咖啡", embedder=fake_embedder,
+            settings=bounded, clock=fake_clock,
+        )
+    assert len(context.preferences) + len(context.episodes) == 6
+    assert len(context.episodes) <= 3
 
 
 async def test_episodes_are_capped_at_three(

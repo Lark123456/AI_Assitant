@@ -38,28 +38,27 @@ def _item(
 
 
 def test_render_includes_slots_preferences_and_episodes() -> None:
-    context = MemoryContext(
-        slots=(_item(type_="slot", slot_key="wake", subject="起床时间", text="7点", time="07:00"),),
-        preferences=(_item(),),
-        episodes=(
-            _item(
-                type_="episode",
-                subject="加班",
-                text="加班到九点",
-                scope={"kind": "on", "date": "2026-11-09"},
-            ),
-        ),
+    slot = _item(type_="slot", slot_key="wake", subject="起床时间", text="7点", time="07:00")
+    episode = _item(
+        type_="episode",
+        subject="加班",
+        text="加班到九点",
+        scope={"kind": "on", "date": "2026-11-09"},
     )
-    block = render_memory_block(context, max_chars=800, item_max_chars=120)
-    assert "长期作息：" in block
-    assert "起床时间：07:00" in block
-    assert "稳定偏好：" in block
-    assert "近期事件：" in block
-    assert "11-09 加班到九点" in block
+    context = MemoryContext(slots=(slot,), preferences=(_item(),), episodes=(episode,))
+    block = render_memory_block(context, max_chars=4000, item_max_chars=120)
+    assert "长期作息：" in block.text
+    assert "起床时间：07:00" in block.text
+    assert "稳定偏好：" in block.text
+    assert "近期事件：" in block.text
+    assert "11-09 加班到九点" in block.text
+    assert len(block.items) == 3
 
 
 def test_render_empty_context_returns_empty_string() -> None:
-    assert render_memory_block(MemoryContext(), max_chars=800, item_max_chars=120) == ""
+    block = render_memory_block(MemoryContext(), max_chars=4000, item_max_chars=120)
+    assert block.text == ""
+    assert block.items == ()
 
 
 def test_render_drops_episodes_before_slots_when_over_budget() -> None:
@@ -78,12 +77,15 @@ def test_render_drops_episodes_before_slots_when_over_budget() -> None:
     )
     block = render_memory_block(
         MemoryContext(slots=(slot,), preferences=(preference,), episodes=(episode,)),
-        max_chars=len(baseline),
+        max_chars=len(baseline.text),
         item_max_chars=120,
     )
-    assert "起床时间：07:00" in block
-    assert "偏好：喜欢美式" in block
-    assert "近期事件" not in block
+    assert "起床时间：07:00" in block.text
+    assert "偏好：喜欢美式" in block.text
+    assert "近期事件" not in block.text
+    # 审计只应包含真正进入 Prompt 的两条
+    assert len(block.items) == 2
+    assert episode.id not in {item.id for item in block.items}
 
 
 def test_render_skips_single_item_over_item_limit_without_truncating() -> None:
@@ -94,20 +96,21 @@ def test_render_skips_single_item_over_item_limit_without_truncating() -> None:
             _item(subject="短偏好", text="喜欢美式"),
         )
     )
-    block = render_memory_block(context, max_chars=800, item_max_chars=60)
-    assert "长偏好" not in block
-    assert "短偏好：喜欢美式" in block
+    block = render_memory_block(context, max_chars=4000, item_max_chars=60)
+    assert "长偏好" not in block.text
+    assert "短偏好：喜欢美式" in block.text
     # 不允许出现被截断的半句话
-    assert long_text[:20] not in block
+    assert long_text[:20] not in block.text
+    assert len(block.items) == 1
 
 
 def test_render_labels_inferred_as_reference_only() -> None:
     context = MemoryContext(preferences=(_item(source_class="inferred"),))
-    block = render_memory_block(context, max_chars=800, item_max_chars=120)
-    assert "推断，仅供参考" in block
+    block = render_memory_block(context, max_chars=4000, item_max_chars=120)
+    assert "推断，仅供参考" in block.text
 
 
 def test_render_labels_confirmed() -> None:
     context = MemoryContext(preferences=(_item(source_class="confirmed"),))
-    block = render_memory_block(context, max_chars=800, item_max_chars=120)
-    assert "已确认" in block
+    block = render_memory_block(context, max_chars=4000, item_max_chars=120)
+    assert "已确认" in block.text

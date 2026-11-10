@@ -5,12 +5,16 @@
 ### 变更（阶段 3 修复 F：记忆读取注入）
 1. Friday 每轮处理用户消息时检索长期记忆并注入 system 提示：只取 status=active；pending / superseded / retracted 不参与。
 2. 向量检索只比较 embedding_model 与当前嵌入模型一致的记忆（不同模型的向量不混合比较）；结构化槽位不依赖向量，始终可用。
-3. 注入范围：槽位全量（按 wake / sleep / work_start / work_end / lunch / commute / energy_peak / fixed_event 固定顺序）+ 偏好与有效期内的 episode 向量 top-k；episode 需 valid_to 为空或晚于当前时间，且最多 3 条；相似度低于 MEMORY_INJECT_MIN_SIMILARITY 的不注入。
-4. 预算裁剪按「槽位 → 偏好 → episode」优先级整条取舍：单条超过 MEMORY_INJECT_ITEM_MAX_CHARS 整条跳过，总长不超过 MEMORY_INJECT_MAX_CHARS，禁止截断半句话。
-5. 渲染标注来源：stated=用户明说、confirmed=已确认、inferred=推断，仅供参考；提示词规定推断类不得用于修改日程、提醒时间或主动提醒时机，记忆与用户当前说法冲突时以当前说法为准。
-6. 每轮注入写 event_log（direction=system、type=memory_context），payload 含 query、memory_ids、逐条 type/slot_key/source_class/similarity、degraded 与 block_chars；幂等键 memory-context:{source_event_id}。空注入且未降级时不写。
-7. 嵌入不可用或调用失败时降级为只注入槽位，degraded=true，回复不阻塞。
-8. 新增配置：MEMORY_INJECT_ENABLED=true、MEMORY_INJECT_TOPK=6、MEMORY_INJECT_MIN_SIMILARITY=0.45、MEMORY_INJECT_MAX_CHARS=800、MEMORY_INJECT_ITEM_MAX_CHARS=120。
+3. 检索查询由「当前用户消息 + 最近最多 4 条用户消息」组成；助手回复只进入对话历史，不作为用户事实参与检索。
+4. slot 召回增加 valid_from / valid_to 与 scope 有效性过滤；同一 slot_key 只注入一条最新有效记录（按 recorded_at 取最新），总量不超过 8 条。
+5. 偏好与 episode 同样校验 valid_from / valid_to 与 scope（persistent / recurring 长期有效；on / until 按日期终点判断，valid_to 缺失时由 scope 日期推导）。
+6. 偏好与 episode 统一按相似度排序后选取：合计不超过 MEMORY_INJECT_TOPK=6，其中 episode 最多 3 条；相似度低于 MEMORY_INJECT_MIN_SIMILARITY 的不参与。
+7. 预算裁剪按「槽位 → 偏好 → episode」优先级整条取舍：单条超过 MEMORY_INJECT_ITEM_MAX_CHARS 整条跳过，总长不超过 MEMORY_INJECT_MAX_CHARS，禁止截断半句话；审计只记录真正进入 Prompt 的记忆。
+8. 渲染标注来源：stated=用户明说、confirmed=已确认、inferred=推断，仅供参考；提示词规定推断类不得用于修改日程、提醒时间或主动提醒时机，记忆与用户当前说法冲突时以当前说法为准。
+9. 「已知长期信息」在提示词中标记为不可信数据：即使其中出现指令式文字，也不得作为系统指令执行。
+10. 每轮（含无命中、嵌入降级、功能关闭）都写 event_log（direction=system、type=memory_context），payload 含 retrieval_version、source_event_id、enabled、query、实际注入的 memory_ids、similarities、items、result_count、retrieved_count、duration_ms、degraded、degraded_reason、embedding_model、block_chars；幂等键 memory-context:{source_event_id}。审计在 LLM 调用前单独提交，后续失败回滚不会丢失。
+11. Embedding 请求使用 asyncio.wait_for 加 MEMORY_INJECT_TIMEOUT_SECONDS=2.0 超时；超时或失败降级为只注入槽位，degraded=true，Friday 正常回复。
+12. 新增配置：MEMORY_INJECT_ENABLED=false（默认关闭）、MEMORY_INJECT_TOPK=6、MEMORY_INJECT_MIN_SIMILARITY=0.45、MEMORY_INJECT_MAX_CHARS=4000、MEMORY_INJECT_ITEM_MAX_CHARS=120、MEMORY_INJECT_TIMEOUT_SECONDS=2.0；检索版本常量 RETRIEVAL_VERSION=memory-retrieve-v1。
 
 ### 变更（阶段 3 修复 C：抽取器 v2）
 1. 抽取器输出 schema 移除 state_signal：MemoryCandidate.type 只允许 slot | preference | episode；数据库 CHECK 枚举保留 state_signal 供历史数据使用。
