@@ -42,6 +42,12 @@ class Settings(BaseSettings):
     memory_batch_max_events: int = 40
     memory_neighbor_threshold: float = 0.75
     memory_neighbor_topk: int = 5
+    # 阶段 3b：把长期记忆注入 Friday 上下文
+    memory_inject_enabled: bool = True
+    memory_inject_topk: int = 6
+    memory_inject_min_similarity: float = 0.45
+    memory_inject_max_chars: int = 800
+    memory_inject_item_max_chars: int = 120
     log_level: str = "INFO"
 
 

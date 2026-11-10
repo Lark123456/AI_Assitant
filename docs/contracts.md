@@ -2,6 +2,16 @@
 
 ## 变更记录
 
+### 变更（阶段 3 修复 F：记忆读取注入）
+1. Friday 每轮处理用户消息时检索长期记忆并注入 system 提示：只取 status=active；pending / superseded / retracted 不参与。
+2. 向量检索只比较 embedding_model 与当前嵌入模型一致的记忆（不同模型的向量不混合比较）；结构化槽位不依赖向量，始终可用。
+3. 注入范围：槽位全量（按 wake / sleep / work_start / work_end / lunch / commute / energy_peak / fixed_event 固定顺序）+ 偏好与有效期内的 episode 向量 top-k；episode 需 valid_to 为空或晚于当前时间，且最多 3 条；相似度低于 MEMORY_INJECT_MIN_SIMILARITY 的不注入。
+4. 预算裁剪按「槽位 → 偏好 → episode」优先级整条取舍：单条超过 MEMORY_INJECT_ITEM_MAX_CHARS 整条跳过，总长不超过 MEMORY_INJECT_MAX_CHARS，禁止截断半句话。
+5. 渲染标注来源：stated=用户明说、confirmed=已确认、inferred=推断，仅供参考；提示词规定推断类不得用于修改日程、提醒时间或主动提醒时机，记忆与用户当前说法冲突时以当前说法为准。
+6. 每轮注入写 event_log（direction=system、type=memory_context），payload 含 query、memory_ids、逐条 type/slot_key/source_class/similarity、degraded 与 block_chars；幂等键 memory-context:{source_event_id}。空注入且未降级时不写。
+7. 嵌入不可用或调用失败时降级为只注入槽位，degraded=true，回复不阻塞。
+8. 新增配置：MEMORY_INJECT_ENABLED=true、MEMORY_INJECT_TOPK=6、MEMORY_INJECT_MIN_SIMILARITY=0.45、MEMORY_INJECT_MAX_CHARS=800、MEMORY_INJECT_ITEM_MAX_CHARS=120。
+
 ### 变更（阶段 3 修复 C：抽取器 v2）
 1. 抽取器输出 schema 移除 state_signal：MemoryCandidate.type 只允许 slot | preference | episode；数据库 CHECK 枚举保留 state_signal 供历史数据使用。
 2. EXTRACTOR_VERSION 升为 memory-extract-v2；提示词重写 episode 判定条件（必须有日期锚点，且偏离常规并影响时间/精力/可用性，或带日期的具体事件），并内嵌 6 条正例与 8 条反例（few-shot 单独维护，不得取自评测用例）。
