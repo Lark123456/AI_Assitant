@@ -1,0 +1,39 @@
+/// 全应用文案；页面不得写死中文。
+abstract final class S {
+  static const appName = 'Butler';
+
+  static const tabToday = '今日';
+  static const tabChat = '对话';
+  static const tabTasks = '任务';
+  static const tabProfile = '我的';
+
+  static const greetingDawn = '夜深了';
+  static const greetingMorning = '早上好';
+  static const greetingNoon = '中午好';
+  static const greetingAfternoon = '下午好';
+  static const greetingEvening = '晚上好';
+
+  static const retry = '重试';
+  static const loadingFailed = '加载失败';
+  static const syncFailed = '同步异常';
+  static const retrySync = '重试同步';
+  static const syncing = '正在重新同步';
+  static const offline = '离线，消息将在联网后发送';
+  static const sending = '发送中';
+  static const waitingForNetwork = '等待联网';
+  static const sendFailed = '网络异常，请重试';
+  static const newMessages = '有新消息';
+
+  static const todayEmpty = '今天还没有安排';
+  static const tellFriday = '告诉 Friday';
+  static const adjust = '调整';
+  static const morningBrief = '晨间简报';
+  static const eveningReview = '晚间复盘';
+  static const unscheduled = '未排期';
+  static const planForToday = '排进今天';
+  static const inProgress = '进行中';
+  static const done = '已完成';
+  static const skipped = '已跳过';
+  static const overdue = '已逾期';
+  static const waitingSync = '待同步';
+}

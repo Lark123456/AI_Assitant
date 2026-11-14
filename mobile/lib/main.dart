@@ -1,16 +1,26 @@
 import 'package:flutter/material.dart';
+import 'package:intl/date_symbol_data_local.dart';
 
-void main() {
-  runApp(const MainApp());
+import 'core/strings.dart';
+import 'core/theme/app_theme.dart';
+
+Future<void> main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  await initializeDateFormatting('zh_CN');
+  runApp(const ButlerApp());
 }
 
-class MainApp extends StatelessWidget {
-  const MainApp({super.key});
+class ButlerApp extends StatelessWidget {
+  const ButlerApp({super.key});
 
   @override
   Widget build(BuildContext context) {
-    return const MaterialApp(
-      home: Scaffold(body: Center(child: Text('Hello World!'))),
+    return MaterialApp(
+      title: S.appName,
+      theme: AppTheme.light(),
+      darkTheme: AppTheme.dark(),
+      themeMode: ThemeMode.system,
+      home: const Scaffold(body: Center(child: Text(S.appName))),
     );
   }
 }
