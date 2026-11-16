@@ -77,6 +77,20 @@ set "CLASSPATH=%APP_HOME%\gradle\wrapper\gradle-wrapper.jar"
 | 6.4 调试面板 | `lib/features/debug` |
 | 6.5 主题 | `lib/core/theme` |
 
+## 出站意图与卡片对应
+
+| 意图 | 卡片类型 |
+|---|---|
+| text | `TextMessage` |
+| confirm_card | `ConfirmCard` |
+| choice | `ChoiceCard` |
+| nudge | `TextMessage`（带 `reason`） |
+| schedule_view | 今日页时间线 |
+| plan_proposal | `PlanProposalCard` |
+| memory_confirm | `MemoryConfirmCard` |
+
+Jarvis 引荐使用 `JarvisIntroCard`，接受后由 Mock 仓库在同一消息流追加诊断 `ChoiceCard`、`ThinkingCard`、`PlanProposalCard`。
+
 ## 调试面板
 
 debug 构建下长按 Today 页标题进入。支持模拟时间、网络状态、数据集、主题、文字缩放、Jarvis 引荐与发送失败。
