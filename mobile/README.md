@@ -97,4 +97,10 @@ debug 构建下长按 Today 页标题进入。支持模拟时间、网络状态�
 
 ## 截图
 
-存放于 `mobile/screenshots/`，使用虚构数据，按 `docs/mobile-u1-plan.md` 验收章节提交。
+存放于 `mobile/screenshots/`，使用虚构数据。当前开发环境未连接 Android 设备或模拟器，截图与真机验收标记为「待验收」，完成后补充。
+
+## 验收状态
+
+- `analyze` / `format` / `test` / `build apk --debug`：通过（82 项测试）
+- APK SDK：`sdkVersion 26`、`targetSdkVersion 36`
+- 真机验收与截图：待执行（当前无可用设备）
