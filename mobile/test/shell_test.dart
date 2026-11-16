@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:intl/date_symbol_data_local.dart';
 import 'package:mobile/core/strings.dart';
+import 'package:mobile/features/chat/chat_page.dart';
 import 'package:mobile/features/today/today_page.dart';
 import 'package:mobile/main.dart';
 
@@ -36,7 +37,7 @@ void main() {
 
     await tester.tap(_tab(S.tabChat));
     await tester.pumpAndSettle();
-    expect(find.text(S.placeholderBody), findsOneWidget);
+    expect(find.byType(ChatPage), findsOneWidget);
 
     await tester.tap(_tab(S.tabTasks));
     await tester.pumpAndSettle();

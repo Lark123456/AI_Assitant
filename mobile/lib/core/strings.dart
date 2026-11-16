@@ -52,4 +52,21 @@ abstract final class S {
   static const reviewConfirm = '按当前完成情况提交？';
   static const submit = '提交';
   static const cancel = '取消';
+
+  static const chatSubtitle = '日常助理 · 随时待命';
+  static const inputHint = '给 Friday 发消息';
+  static const send = '发送';
+  static const chatEmpty = '还没有消息';
+  static const thinking = '正在理解你的情况';
+  static const organizing = '正在整理信息';
+  static const drafting = '正在起草方案';
+  static const executing = '正在执行';
+  static const jarvisPlan = '请 Jarvis 规划';
+  static const jarvisLater = '暂时不用';
+  static const confirmAll = '全部确认';
+  static const memoryConfirm = '确认';
+  static const memoryReject = '忽略';
+  static const planAccept = '接受';
+  static const planAdjust = '调整';
+  static const planVeto = '否决';
 }

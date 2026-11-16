@@ -21,6 +21,7 @@ class MockChatRepository implements ChatRepository {
     this.replyDelay = const Duration(milliseconds: 600),
     this.streamInterval = const Duration(milliseconds: 80),
     this.streamChunk = 2,
+    this.failNextSend = false,
   }) : _clock = clock,
        _messages = List<ChatMessage>.of(seed ?? seedMessages(clock.now())) {
     _networkSub = network.watch().listen(_onNetworkChanged);
@@ -38,6 +39,7 @@ class MockChatRepository implements ChatRepository {
   StreamSubscription<NetworkStatus>? _networkSub;
   var _counter = 0;
   var _flushing = false;
+  var failNextSend = false;
 
   @override
   Stream<List<ChatMessage>> watchMessages() async* {
@@ -49,6 +51,13 @@ class MockChatRepository implements ChatRepository {
   Future<void> sendText(String text) async {
     final trimmed = text.trim();
     if (trimmed.isEmpty) return;
+
+    final failed = _lastFailed(trimmed);
+    if (failed != null) {
+      _replace(failed.id, failed.copyWith(syncState: SyncState.pending));
+      await _confirmAndReply(failed.id);
+      return;
+    }
 
     final queued = network.current == NetworkStatus.offline;
     final id = _nextId();
@@ -63,6 +72,14 @@ class MockChatRepository implements ChatRepository {
     );
     _emit();
     if (queued) return;
+    if (failNextSend) {
+      failNextSend = false;
+      final message = _find(id);
+      if (message is TextMessage) {
+        _replace(id, message.copyWith(syncState: SyncState.failed));
+      }
+      throw StateError('mock send failed');
+    }
     await _confirmAndReply(id);
   }
 
@@ -263,6 +280,19 @@ class MockChatRepository implements ChatRepository {
       return '听起来今天消耗不小。要不要把下午的安排压缩一点，先留一段空档？';
     }
     return '收到。我先按你现在的节奏排，需要调整随时说。';
+  }
+
+  TextMessage? _lastFailed(String text) {
+    TextMessage? found;
+    for (final message in _messages) {
+      if (message is TextMessage &&
+          message.sender == ChatSender.user &&
+          message.syncState == SyncState.failed &&
+          message.text == text) {
+        found = message;
+      }
+    }
+    return found;
   }
 
   String? _lastUserText() {

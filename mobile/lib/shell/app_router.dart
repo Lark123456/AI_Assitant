@@ -2,6 +2,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../core/strings.dart';
+import '../features/chat/chat_page.dart';
 import '../features/today/today_page.dart';
 import 'placeholder_page.dart';
 import 'shell_scaffold.dart';
@@ -32,8 +33,7 @@ GoRouter createAppRouter() => GoRouter(
           routes: [
             GoRoute(
               path: '/chat',
-              builder: (context, state) =>
-                  const PlaceholderPage(title: S.tabChat),
+              builder: (context, state) => const ChatPage(),
             ),
           ],
         ),
