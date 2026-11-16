@@ -274,6 +274,19 @@ class MockChatRepository implements ChatRepository {
     });
   }
 
+  void injectJarvisIntro() {
+    _messages.add(
+      JarvisIntroCard(
+        id: _nextId(),
+        sender: ChatSender.friday,
+        createdAt: _clock.now(),
+        summary: '如果你愿意，我可以让 Jarvis 帮你做一次系统规划',
+        previewQuestions: const ['最近主要在忙什么', '希望先解决哪一块'],
+      ),
+    );
+    _emit();
+  }
+
   String _replyText() {
     final lastUserText = _lastUserText();
     if (lastUserText != null && lastUserText.contains('累')) {

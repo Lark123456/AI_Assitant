@@ -69,4 +69,18 @@ abstract final class S {
   static const planAccept = '接受';
   static const planAdjust = '调整';
   static const planVeto = '否决';
+
+  static const debugPanel = '调试面板';
+  static const debugTime = '模拟时间';
+  static const debugTimeSystem = '跟随系统';
+  static const debugPlusHour = '+1 小时';
+  static const debugPlusDay = '+1 天';
+  static const debugNetwork = '网络状态';
+  static const debugDataset = '数据集';
+  static const debugTheme = '主题';
+  static const debugTextScale = '文字缩放';
+  static const debugFailSend = '下一次发送失败';
+  static const debugInjectJarvis = '插入 Jarvis 引荐';
+  static const debugReset = '重置';
+  static const debugInjected = '已插入 Jarvis 引荐';
 }

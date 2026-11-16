@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -8,6 +9,7 @@ import '../../core/strings.dart';
 import '../../core/theme/tokens.dart';
 import '../../domain/enums.dart';
 import '../../domain/models/today.dart';
+import '../debug/debug_panel_page.dart';
 import 'today_controller.dart';
 
 class TodayPage extends ConsumerWidget {
@@ -19,7 +21,17 @@ class TodayPage extends ConsumerWidget {
     final networkStatus = ref.watch(networkStatusProvider).value;
     return Scaffold(
       appBar: AppBar(
-        title: const Text(S.tabToday),
+        title: GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onLongPress: kDebugMode
+              ? () => Navigator.of(context).push(
+                  MaterialPageRoute<void>(
+                    builder: (_) => const DebugPanelPage(),
+                  ),
+                )
+              : null,
+          child: const Text(S.tabToday),
+        ),
         actions: [
           IconButton(
             tooltip: S.previousDay,
