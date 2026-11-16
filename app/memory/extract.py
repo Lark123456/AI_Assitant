@@ -14,7 +14,7 @@ from app.llm.gateway import LLMGateway
 from app.memory.schemas import ExtractionResult
 from app.memory.validate import EventRecord
 
-EXTRACTOR_VERSION = "memory-extract-v2.2"
+EXTRACTOR_VERSION = "memory-extract-v2.3"
 EXTRACT_ALIAS = "memory_extract"
 MAX_RELATED_MEMORIES = 10
 
@@ -26,6 +26,11 @@ FEW_SHOT_POSITIVE: tuple[str, ...] = (
     "今天加班到十点半才走",
     "昨天睡到中午十二点才起来",
     "今天下午在工位上头疼得没法集中",
+    "今天五点就醒了，没睡够",
+    "昨天下午两点才吃午饭",
+    "我把酒戒了",
+    "我从杭州搬到成都了",
+    "我原来每天跑步，现在隔天跑",
 )
 
 FEW_SHOT_NEGATIVE: tuple[str, ...] = (
