@@ -310,7 +310,7 @@ async def _run_case(
         run_id = run.id
         user_id = user.id
 
-    await process_run(
+    ok = await process_run(
         sessionmaker,
         run_id,
         gateway=gateway,
@@ -318,6 +318,12 @@ async def _run_case(
         clock=clock,
         settings=settings,
     )
+    if not ok:
+        async with sessionmaker() as session:
+            failed = await session.get(MemoryExtractionRun, run_id)
+        raise RuntimeError(
+            f"run_failed: {failed.error if failed is not None else 'missing'}"
+        )
 
     async with sessionmaker() as session:
         logs = (
