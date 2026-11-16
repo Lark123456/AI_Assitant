@@ -12,8 +12,8 @@ from app.memory.extract import (
 CASES_PATH = Path(__file__).resolve().parents[1] / "evals" / "memory_cases.yaml"
 
 
-def test_extractor_version_is_v2_1() -> None:
-    assert EXTRACTOR_VERSION == "memory-extract-v2.1"
+def test_extractor_version_is_v2_2() -> None:
+    assert EXTRACTOR_VERSION == "memory-extract-v2.2"
 
 
 def test_few_shot_counts() -> None:
@@ -30,5 +30,7 @@ def test_few_shot_text_does_not_appear_in_eval_cases() -> None:
 def test_system_prompt_contains_rules_and_examples() -> None:
     prompt = build_system_prompt()
     assert "episode 必须有明确日期锚点" in prompt
+    assert "周期性固定安排" in prompt
+    assert "fixed_event" in prompt
     for text in (*FEW_SHOT_POSITIVE, *FEW_SHOT_NEGATIVE):
         assert text in prompt

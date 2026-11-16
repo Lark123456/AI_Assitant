@@ -175,6 +175,82 @@ def test_identical_episode_text_same_day_is_duplicate_with_time() -> None:
     assert decision.reason == "duplicate_open_fact"
 
 
+def test_fixed_event_different_rule_goes_ask() -> None:
+    """同一 fixed_event 槽位、不同 rule：应让用户确认，不能静默新增。"""
+    decision = resolve_rules(
+        _candidate(
+            type_="slot",
+            slot_key="fixed_event",
+            subject="固定会议",
+            value={"text": "开会"},
+            scope={"kind": "recurring", "rule": "每周四"},
+        ),
+        [
+            _neighbor(
+                type="slot",
+                slot_key="fixed_event",
+                subject="固定会议",
+                value={"text": "开会"},
+                scope={"kind": "recurring", "rule": "每周三"},
+            )
+        ],
+        now=NOW,
+        threshold=THRESHOLD,
+    )
+    assert decision.action == "ASK"
+    assert decision.reason == "slot_conflict_pending"
+
+
+def test_fixed_event_same_rule_and_value_noops() -> None:
+    decision = resolve_rules(
+        _candidate(
+            type_="slot",
+            slot_key="fixed_event",
+            subject="固定会议",
+            value={"text": "开会"},
+            scope={"kind": "recurring", "rule": "每周三"},
+        ),
+        [
+            _neighbor(
+                type="slot",
+                slot_key="fixed_event",
+                subject="固定会议",
+                value={"text": "开会"},
+                scope={"kind": "recurring", "rule": "每周三"},
+            )
+        ],
+        now=NOW,
+        threshold=THRESHOLD,
+    )
+    assert decision.action == "NOOP"
+    assert decision.reason == "duplicate_slot"
+
+
+def test_fixed_event_same_rule_different_value_asks() -> None:
+    decision = resolve_rules(
+        _candidate(
+            type_="slot",
+            slot_key="fixed_event",
+            subject="固定会议",
+            value={"text": "周会"},
+            scope={"kind": "recurring", "rule": "每周三"},
+        ),
+        [
+            _neighbor(
+                type="slot",
+                slot_key="fixed_event",
+                subject="固定会议",
+                value={"text": "开会"},
+                scope={"kind": "recurring", "rule": "每周三"},
+            )
+        ],
+        now=NOW,
+        threshold=THRESHOLD,
+    )
+    assert decision.action == "ASK"
+    assert decision.reason == "slot_conflict_pending"
+
+
 def test_suppressed_topic_noops() -> None:
     decision = resolve_rules(
         _candidate(),

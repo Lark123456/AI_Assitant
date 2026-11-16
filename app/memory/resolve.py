@@ -76,8 +76,16 @@ def resolve_rules(
                 neighbor.type != "slot"
                 or neighbor.status != "active"
                 or neighbor.slot_key != candidate.slot_key
-                or not scope_equal(neighbor.scope, candidate.scope)
             ):
+                continue
+            if candidate.slot_key == "fixed_event":
+                # 固定事件按 rule 区分：rule 不同视为同一槽位冲突，交给用户确认
+                if scope_equal(neighbor.scope, candidate.scope) and value_equal(
+                    neighbor.value, candidate.value
+                ):
+                    return RuleDecision("NOOP", "duplicate_slot", neighbor.id)
+                return RuleDecision("ASK", "slot_conflict_pending", neighbor.id)
+            if not scope_equal(neighbor.scope, candidate.scope):
                 continue
             if value_equal(neighbor.value, candidate.value):
                 return RuleDecision("NOOP", "duplicate_slot", neighbor.id)
