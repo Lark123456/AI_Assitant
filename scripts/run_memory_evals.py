@@ -24,7 +24,9 @@ import sys
 import uuid
 from collections import defaultdict
 from pathlib import Path
+from urllib.parse import urlparse
 
+import httpx
 import yaml
 from sqlalchemy import select
 
@@ -170,6 +172,25 @@ def _build_gateway(settings: Settings, sessionmaker) -> LLMGateway:
         clock=FakeClock(dt.datetime.fromisoformat("2026-11-06T10:00:00+08:00")),
         daily_limit=settings.llm_daily_limit,
     )
+
+
+async def _preflight(gateway: LLMGateway) -> str:
+    """真实调用一次 memory_extract；认证、订阅或模型错误立即中止。"""
+    try:
+        result = await gateway.chat(
+            alias="memory_extract",
+            messages=[{"role": "user", "content": "只回复 OK"}],
+            response_model=None,
+            trace_id="memory-eval-preflight",
+        )
+    except httpx.HTTPStatusError as exc:
+        body = exc.response.text[:500]
+        raise SystemExit(
+            f"预检失败 HTTP {exc.response.status_code}：{body}"
+        ) from exc
+    except Exception as exc:
+        raise SystemExit(f"预检失败：{type(exc).__name__}: {exc}") from exc
+    return result.model_id or "unknown"
 
 
 def _matches(expected: dict, memory: dict) -> bool:
@@ -666,6 +687,9 @@ async def main_async(
         f"记忆评测：now={meta['now']} tz={meta['tz']} cases={len(cases)} "
         f"db={settings.database_url} raw={raw_path}"
     )
+    endpoint_host = urlparse(settings.llm_base_url).netloc
+    preflight_model = await _preflight(gateway)
+    print(f"预检通过：host={endpoint_host} model_id={preflight_model}")
     processed = 0
     error_count = 0
     aborted = False
@@ -725,6 +749,8 @@ async def main_async(
         ).all() if eval_user_ids else []
     git_sha, dirty = _resolve_git_state(args.git_sha, args.git_dirty)
     metrics["models"] = [{"alias": alias, "model_id": model_id} for alias, model_id in model_rows]
+    metrics["llm_endpoint_host"] = endpoint_host
+    metrics["preflight_model_id"] = preflight_model
     metrics["embedding_model"] = embedder.model_name
     metrics["extractor_version"] = EXTRACTOR_VERSION
     metrics["harness_version"] = HARNESS_VERSION
