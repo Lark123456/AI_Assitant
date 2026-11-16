@@ -36,4 +36,8 @@ abstract final class S {
   static const skipped = '已跳过';
   static const overdue = '已逾期';
   static const waitingSync = '待同步';
+
+  static const placeholderBody = '这一页将在后续批次实现';
+  static const tasksNextStage = '任务页将在下一阶段提供';
+  static const profileNextStage = '我的页将在下一阶段提供';
 }
