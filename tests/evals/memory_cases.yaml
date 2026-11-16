@@ -10,6 +10,7 @@
 meta:
   now: "2026-11-06T10:00:00+08:00"  # 周五
   tz: "Asia/Shanghai"
+  day_start: "04:00"
 
 cases:
   # 槽位明说
@@ -37,19 +38,25 @@ cases:
   - {id: c08, text: "我现在每周四开会", seed: [{type: slot, slot_key: fixed_event, value_text: "每周三开会"}], expected_action: ASK, expect: []}
 
   # 例外（今天加班）不能覆盖常规槽位
-  - {id: e01, text: "今天加班到九点", seed: [{type: slot, slot_key: work_end, value_text: "6点", time: "18:00"}], expect: [{type: episode, scope_kind: 'on', scope_date: "2026-11-06"}], expected_action: ADD}
-  - {id: e02, text: "今天睡到9点才起", seed: [{type: slot, slot_key: wake, value_text: "7点", time: "07:00"}], expect: [{type: episode, scope_kind: 'on', scope_date: "2026-11-06"}], expected_action: ADD}
+  - {id: e01, text: "今天加班到九点", seed: [{type: slot, slot_key: work_end, value_text: "6点", time: "18:00"}], expect: [{type: episode, scope_kind: 'on', scope_date: "2026-11-06", time: "21:00"}], expected_action: ADD}
+  - {id: e02, text: "今天睡到9点才起", seed: [{type: slot, slot_key: wake, value_text: "7点", time: "07:00"}], expect: [{type: episode, scope_kind: 'on', scope_date: "2026-11-06", time: "09:00"}], expected_action: ADD}
   - {id: e03, text: "今天中午没吃饭", seed: [{type: slot, slot_key: lunch, value_text: "12点", time: "12:00"}], expect: [{type: episode, scope_kind: 'on', scope_date: "2026-11-06"}], expected_action: ADD}
   - {id: e04, text: "今天提前下班了", seed: [{type: slot, slot_key: work_end, value_text: "6点", time: "18:00"}], expect: [{type: episode, scope_kind: 'on', scope_date: "2026-11-06"}], expected_action: ADD}
   - {id: e05, text: "今天没去通勤，居家办公", seed: [{type: slot, slot_key: commute, value_text: "8点半", time: "08:30"}], expect: [{type: episode, scope_kind: 'on', scope_date: "2026-11-06"}], expected_action: ADD}
   - {id: e06, text: "今天下午精力很差", seed: [{type: slot, slot_key: energy_peak, value_text: "10点", time: "10:00"}], expect: [{type: episode, scope_kind: 'on', scope_date: "2026-11-06"}], expected_action: ADD}
+
+  # episode 时间值：有唯一合理读法才写 time
+  - {id: e07, text: "今早六点就起了", expect: [{type: episode, scope_kind: 'on', scope_date: "2026-11-06", time: "06:00"}]}
+  - {id: e08, text: "昨晚十一点才睡", expect: [{type: episode, scope_kind: 'on', scope_date: "2026-11-05", time: "23:00"}]}
+  - {id: e09, text: "昨天五点就下班了", expect: [{type: episode, scope_kind: 'on', scope_date: "2026-11-05", time: "17:00"}]}
+  - {id: e10, text: "昨天中午一点才吃上饭", expect: [{type: episode, scope_kind: 'on', scope_date: "2026-11-05", time: "13:00"}]}
 
   # 相对时间
   - {id: r01, text: "明天下午三点开会", expect: []}
   - {id: r02, text: "下周三出差", expect: []}
   - {id: r03, text: "月底交房租", expect: []}
   - {id: r04, text: "今天要加班", expect: [{type: episode, scope_kind: 'on', scope_date: "2026-11-06"}]}
-  - {id: r05, text: "后天去体检", expect: [], expect_rejected: true, reject_category: sensitive, reject_prefix: "rejected:sensitive"}
+  - {id: r05, text: "后天去体检", expect: []}
   - {id: r06, text: "这周五聚餐", expect: []}
   - {id: r07, text: "明天开始早起", expect: []}
   - {id: r08, text: "下周三之前把报告写完", expect: []}
@@ -140,6 +147,10 @@ cases:
   - {id: d05, texts: ["我晚上11点睡", "我一般都是晚上11点睡"], expect: [{type: slot, slot_key: sleep, time: "23:00"}]}
   - {id: d06, text: "我喜欢美式，我只喝美式", expect: [{type: preference, value_text: "美式"}]}
 
+  # episode 同日去重 / 异日不误判
+  - {id: m01, texts: ["今天加班到九点", "对，今天要加班到九点"], expect: [{type: episode, scope_kind: 'on', scope_date: "2026-11-06", time: "21:00"}]}
+  - {id: m02, texts: ["今天加班到九点", "明天加班到九点"], expect: [{type: episode, scope_kind: 'on', scope_date: "2026-11-06", time: "21:00"}, {type: episode, scope_kind: 'on', scope_date: "2026-11-07", time: "21:00"}]}
+
   # 同一事实多种说法
   - {id: v01, text: "我七点起床", expect: [{type: slot, slot_key: wake, time: "07:00"}], check_time: {slot_key: wake, time: "07:00"}}
   - {id: v02, text: "我早上七点起床", expect: [{type: slot, slot_key: wake, time: "07:00"}], check_time: {slot_key: wake, time: "07:00"}}
@@ -165,6 +176,10 @@ cases:
   - {id: q14, text: "明天下午三点提醒我开会", expect: []}
 
   # 过去日期：有效期内接受，超出有效期拒绝
-  - {id: b01, text: "昨天加班到十点", expect: [{type: episode, scope_kind: 'on', scope_date: "2026-11-05"}], expected_action: ADD}
+  - {id: b01, text: "昨天加班到十点", expect: [{type: episode, scope_kind: 'on', scope_date: "2026-11-05", time: "22:00"}], expected_action: ADD}
   - {id: b02, text: "上周三加班到十点", expect: [], expect_rejected: true, reject_category: past, reject_prefix: "rejected:episode_date_past"}
-  - {id: b03, text: "昨天睡到11点才起", expect: [{type: episode, scope_kind: 'on', scope_date: "2026-11-05"}], expected_action: ADD}
+  - {id: b03, text: "昨天睡到11点才起", expect: [{type: episode, scope_kind: 'on', scope_date: "2026-11-05", time: "11:00"}], expected_action: ADD}
+
+  # 用例级 now / day_start：0 点到 day_start 之间的「今天」按用户日解析
+  - {id: l01, now: "2026-11-07T01:30:00+08:00", day_start: "04:00", text: "今天加班到很晚", expect: [{type: episode, scope_kind: 'on', scope_date: "2026-11-06", time: null}]}
+  - {id: l02, now: "2026-11-07T05:00:00+08:00", day_start: "04:00", text: "今天要加班到九点", expect: [{type: episode, scope_kind: 'on', scope_date: "2026-11-07", time: "21:00"}]}

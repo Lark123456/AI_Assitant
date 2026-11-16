@@ -25,13 +25,13 @@ def _parse_date_text(text: str, base: dt.date) -> dt.date | None:
         return dt.date.fromisoformat(value)
     except ValueError:
         pass
-    if value in ("今天", "今日"):
+    if value in ("今天", "今日", "今晚", "今早"):
         return base
     if value in ("明天", "明日"):
         return base + dt.timedelta(days=1)
     if value == "后天":
         return base + dt.timedelta(days=2)
-    if value in ("昨天", "昨日"):
+    if value in ("昨天", "昨日", "昨晚", "昨夜"):
         return base - dt.timedelta(days=1)
 
     if value in ("月底", "本月底", "这个月底", "月末"):

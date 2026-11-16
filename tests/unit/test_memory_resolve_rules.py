@@ -149,6 +149,32 @@ def test_same_episode_different_day_is_not_duplicate() -> None:
     assert decision.action == "NEEDS_LLM"
 
 
+def test_identical_episode_text_same_day_is_duplicate_with_time() -> None:
+    """完全相同的文本与时间：同一天只保留一条。"""
+    decision = resolve_rules(
+        _candidate(
+            type_="episode",
+            slot_key=None,
+            subject="加班",
+            value={"text": "加班到九点", "time": "21:00"},
+            scope={"kind": "on", "date": "2026-11-06"},
+        ),
+        [
+            _neighbor(
+                type="episode",
+                slot_key=None,
+                subject="加班",
+                value={"text": "加班到九点", "time": "21:00"},
+                scope={"kind": "on", "date": "2026-11-06"},
+            )
+        ],
+        now=NOW,
+        threshold=THRESHOLD,
+    )
+    assert decision.action == "NOOP"
+    assert decision.reason == "duplicate_open_fact"
+
+
 def test_suppressed_topic_noops() -> None:
     decision = resolve_rules(
         _candidate(),

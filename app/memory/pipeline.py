@@ -247,6 +247,7 @@ def _log(
     neighbors: list[Neighbor],
     action: str,
     reason: str,
+    target_id: uuid.UUID | None,
     alias: str | None,
     llm_call_id: uuid.UUID | None,
     clock: Clock,
@@ -268,6 +269,7 @@ def _log(
         "fingerprint": candidate.fingerprint,
         "raw_fingerprint": raw_fingerprint,
         "notes": list(candidate.notes),
+        "target_id": str(target_id) if target_id is not None else None,
         "embedding_error": embedding_error,
     }
     session.add(
@@ -396,6 +398,7 @@ async def _apply_decision(
         neighbors=neighbors,
         action=action,
         reason=decision.reason,
+        target_id=decision.target_id,
         alias=alias,
         llm_call_id=llm_call_id,
         clock=clock,

@@ -118,6 +118,27 @@ def _check_scope_kinds(case: dict) -> None:
                 )
 
 
+def _check_case_overrides(case: dict) -> None:
+    """用例级 now / tz / day_start 必须是可解析的字符串。"""
+    case_id = case.get("id")
+    for key in ("now", "tz", "day_start"):
+        if key not in case:
+            continue
+        value = case[key]
+        if not isinstance(value, str) or not value:
+            raise SystemExit(f"用例 {case_id} 的 {key} 必须是非空字符串：{value!r}")
+    try:
+        if "now" in case:
+            dt.datetime.fromisoformat(case["now"])
+    except ValueError as exc:
+        raise SystemExit(f"用例 {case_id} 的 now 无法解析：{exc}") from exc
+    try:
+        if "day_start" in case:
+            dt.time.fromisoformat(case["day_start"])
+    except ValueError as exc:
+        raise SystemExit(f"用例 {case_id} 的 day_start 无法解析：{exc}") from exc
+
+
 def load_cases(path: Path) -> tuple[dict, str]:
     """加载用例并做结构校验；返回 (配置, 文件 sha256)。"""
     raw = path.read_bytes()
@@ -132,6 +153,7 @@ def load_cases(path: Path) -> tuple[dict, str]:
         if not isinstance(case, dict) or "id" not in case:
             raise SystemExit(f"存在缺少 id 的用例：{path}")
         _check_scope_kinds(case)
+        _check_case_overrides(case)
     return cfg, digest
 
 
@@ -225,16 +247,32 @@ async def _seed_memory(
     )
 
 
+def _target_source_class(log: MemoryDecisionLog) -> str | None:
+    """被裁决指向的邻居的 source_class；无 target 或邻居缺失时返回 None。"""
+    payload = log.candidate or {}
+    target_id = payload.get("target_id")
+    if not target_id:
+        return None
+    items = (log.neighbors or {}).get("items") or []
+    for item in items:
+        if str(item.get("id")) == str(target_id):
+            return item.get("source_class")
+    return None
+
+
 async def _run_case(
     sessionmaker, gateway, embedder, settings: Settings, case: dict, meta: dict
 ) -> dict:
-    clock = FakeClock(dt.datetime.fromisoformat(meta["now"]))
+    now_text = case.get("now") or meta["now"]
+    tz = case.get("tz") or meta.get("tz", "Asia/Shanghai")
+    day_start_text = case.get("day_start") or meta.get("day_start") or "04:00"
+    clock = FakeClock(dt.datetime.fromisoformat(now_text))
     texts = case.get("texts") or [case["text"]]
     trace_id = f"eval-{case['id']}"
     user = User(
         display_name=f"eval-{case['id']}-{uuid.uuid4().hex[:6]}",
-        timezone=meta.get("tz", "Asia/Shanghai"),
-        day_start=dt.time(4, 0),
+        timezone=tz,
+        day_start=dt.time.fromisoformat(day_start_text),
         rev=1,
     )
     async with sessionmaker() as session:
@@ -302,6 +340,16 @@ async def _run_case(
             elif log.action == "ASK":
                 pending.append(memory)
         run_row = await session.get(MemoryExtractionRun, run_id)
+        log_entries = [
+            {
+                "action": log.action,
+                "reason": log.reason,
+                "memory_id": str(log.memory_id) if log.memory_id else None,
+                "target_source_class": _target_source_class(log),
+                "candidate": log.candidate or {},
+            }
+            for log in logs
+        ]
 
     reasons = [log.reason or "" for log in logs]
     rejected = [
@@ -318,15 +366,7 @@ async def _run_case(
         "decision_actions": decision_actions,
         "reasons": reasons,
         "rejected": rejected,
-        "logs": [
-            {
-                "action": log.action,
-                "reason": log.reason,
-                "memory_id": str(log.memory_id) if log.memory_id else None,
-                "candidate": log.candidate or {},
-            }
-            for log in logs
-        ],
+        "logs": log_entries,
         "written": [
             {
                 "id": str(memory.id),
@@ -370,6 +410,7 @@ def _score(cases: list[dict], results: list[dict | None]) -> dict:
     )
     failures: list[dict] = []
     errored_cases = 0
+    silent_overwrite = 0
 
     for case, result in zip(cases, results, strict=False):
         case_id = str(case["id"])
@@ -389,6 +430,12 @@ def _score(cases: list[dict], results: list[dict | None]) -> dict:
         expected = case.get("expect") or []
         actual = result.get("written") or []
         written_total += len(actual)
+        for log in result.get("logs") or []:
+            if log.get("action") == "SUPERSEDE" and log.get("target_source_class") in (
+                "stated",
+                "confirmed",
+            ):
+                silent_overwrite += 1
         category = case.get("category")
         if category:
             write_by_category[str(category)]["cases"] += 1
@@ -496,6 +543,7 @@ def _score(cases: list[dict], results: list[dict | None]) -> dict:
         "action_accuracy": round(action_correct / action_checked, 4) if action_checked else 0.0,
         "time_accuracy": round(time_correct / time_checked, 4) if time_checked else 0.0,
         "reject_accuracy": round(reject_correct / reject_checked, 4) if reject_checked else 0.0,
+        "silent_overwrite": silent_overwrite,
         "reject_accuracy_by_category": {
             key: {
                 "checked": value["checked"],
@@ -521,6 +569,7 @@ def _score(cases: list[dict], results: list[dict | None]) -> dict:
             "time_correct": time_correct,
             "reject_checked": reject_checked,
             "reject_correct": reject_correct,
+            "silent_overwrite": silent_overwrite,
             "cases": len(results),
             "errored_cases": errored_cases,
         },
@@ -568,6 +617,7 @@ def _print_metrics(metrics: dict) -> None:
         "action_accuracy",
         "time_accuracy",
         "reject_accuracy",
+        "silent_overwrite",
     ):
         print(f"  {key}: {metrics[key]}")
     print(f"  by_type: {metrics['by_type']}")

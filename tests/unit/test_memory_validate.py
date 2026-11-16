@@ -103,18 +103,118 @@ def test_invalid_slot_key_downgrades_to_preference() -> None:
     assert "slot_key_invalid_downgraded" in validated.notes
 
 
-def test_slot_time_unparsed_is_rejected() -> None:
+def test_slot_time_unparsed_downgrades_to_preference() -> None:
     validated = validate_candidate(
         user=USER,
         candidate=_candidate(
+            value_text="不熬夜",
+            time_text="不熬夜",
+            evidence=[EvidenceItem(event_id=EVENT_ID, quote="我不熬夜")],
+        ),
+        event_index=_index("我不熬夜"),
+    )
+    assert not isinstance(validated, RejectedCandidate)
+    assert validated.type == "preference"
+    assert validated.slot_key is None
+    assert "slot_time_unparsed_downgraded" in validated.notes
+
+
+def test_commute_mode_downgrades_to_preference() -> None:
+    validated = validate_candidate(
+        user=USER,
+        candidate=_candidate(
+            slot_key="commute",
+            subject="通勤方式",
+            value_text="开车上班",
+            time_text=None,
+            evidence=[EvidenceItem(event_id=EVENT_ID, quote="我开车上班")],
+        ),
+        event_index=_index("我开车上班"),
+    )
+    assert not isinstance(validated, RejectedCandidate)
+    assert validated.type == "preference"
+    assert validated.slot_key is None
+    assert "slot_commute_mode_downgraded" in validated.notes
+
+
+def test_commute_without_time_or_mode_is_rejected() -> None:
+    validated = validate_candidate(
+        user=USER,
+        candidate=_candidate(
+            slot_key="commute",
+            subject="通勤",
             value_text="随缘",
             time_text="随缘",
-            evidence=[EvidenceItem(event_id=EVENT_ID, quote="我一般随缘起床")],
+            evidence=[EvidenceItem(event_id=EVENT_ID, quote="我随缘通勤")],
         ),
-        event_index=_index("我一般随缘起床"),
+        event_index=_index("我随缘通勤"),
     )
     assert isinstance(validated, RejectedCandidate)
     assert validated.reason == "rejected:slot_time_unparsed"
+
+
+def test_slot_recurring_without_rule_normalizes_to_persistent() -> None:
+    validated = validate_candidate(
+        user=USER,
+        candidate=_candidate(scope=ScopeSpec(kind="recurring", rule=None)),
+        event_index=_index("我平时7点起床"),
+    )
+    assert not isinstance(validated, RejectedCandidate)
+    assert validated.scope == {"kind": "persistent"}
+    assert "slot_scope_normalized" in validated.notes
+
+
+def test_fixed_event_requires_recurring_rule_without_time() -> None:
+    validated = validate_candidate(
+        user=USER,
+        candidate=_candidate(
+            slot_key="fixed_event",
+            subject="固定会议",
+            value_text="开会",
+            time_text=None,
+            scope=ScopeSpec(kind="recurring", rule="每周三"),
+            evidence=[EvidenceItem(event_id=EVENT_ID, quote="我每周三开会")],
+        ),
+        event_index=_index("我每周三开会"),
+    )
+    assert not isinstance(validated, RejectedCandidate)
+    assert validated.type == "slot"
+    assert validated.value == {"text": "开会"}
+    assert validated.scope == {"kind": "recurring", "rule": "每周三"}
+
+
+def test_fixed_event_without_rule_is_rejected() -> None:
+    validated = validate_candidate(
+        user=USER,
+        candidate=_candidate(
+            slot_key="fixed_event",
+            subject="固定会议",
+            value_text="开会",
+            time_text=None,
+            scope=ScopeSpec(kind="recurring", rule=None),
+            evidence=[EvidenceItem(event_id=EVENT_ID, quote="我每周三开会")],
+        ),
+        event_index=_index("我每周三开会"),
+    )
+    assert isinstance(validated, RejectedCandidate)
+    assert validated.reason == "rejected:slot_scope"
+
+
+def test_energy_peak_allows_period_only_value() -> None:
+    validated = validate_candidate(
+        user=USER,
+        candidate=_candidate(
+            slot_key="energy_peak",
+            subject="精力",
+            value_text="上午",
+            time_text="上午",
+            evidence=[EvidenceItem(event_id=EVENT_ID, quote="我上午精力最好")],
+        ),
+        event_index=_index("我上午精力最好"),
+    )
+    assert not isinstance(validated, RejectedCandidate)
+    assert validated.type == "slot"
+    assert validated.value == {"text": "上午"}
 
 
 def test_sensitive_rejected_in_async_even_with_remember_words() -> None:
@@ -187,6 +287,47 @@ def _episode(**overrides) -> MemoryCandidate:
     }
     data.update(overrides)
     return MemoryCandidate(**data)
+
+
+def test_episode_time_uses_activity_role_window() -> None:
+    validated = validate_candidate(
+        user=USER,
+        candidate=_episode(time_text="九点"),
+        event_index=_index("今天加班到九点"),
+    )
+    assert not isinstance(validated, RejectedCandidate)
+    assert validated.value == {"text": "加班到九点", "time": "21:00"}
+
+
+def test_episode_time_omitted_when_role_unknown() -> None:
+    validated = validate_candidate(
+        user=USER,
+        candidate=_episode(
+            subject="状态",
+            value_text="感觉不错",
+            time_text="九点",
+            evidence=[EvidenceItem(event_id=EVENT_ID, quote="今天感觉不错")],
+        ),
+        event_index=_index("今天感觉不错"),
+    )
+    assert not isinstance(validated, RejectedCandidate)
+    assert "time" not in validated.value
+
+
+def test_episode_time_omitted_when_two_roles() -> None:
+    text = "今天睡到9点才起，然后去上班"
+    validated = validate_candidate(
+        user=USER,
+        candidate=_episode(
+            subject="睡眠",
+            value_text="睡到9点才起",
+            time_text="9点",
+            evidence=[EvidenceItem(event_id=EVENT_ID, quote=text)],
+        ),
+        event_index=_index(text),
+    )
+    assert not isinstance(validated, RejectedCandidate)
+    assert "time" not in validated.value
 
 
 def test_episode_requires_on_or_until_scope() -> None:

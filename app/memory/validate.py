@@ -17,6 +17,7 @@ from app.memory.schemas import (
     TIME_SLOT_KEYS,
     EvidenceItem,
     MemoryCandidate,
+    ScopeSpec,
 )
 from app.memory.scope import normalize_scope, scope_valid_to
 from app.memory.text import (
@@ -25,7 +26,15 @@ from app.memory.text import (
     render_tool_fact,
     result_key_to_call_key,
 )
-from app.memory.timeparse import disambiguate_slot_time, parse_time_text
+from app.memory.timeparse import (
+    COMMUTE_MODE_WORDS,
+    PERIOD_SLOT_KEYS,
+    TIME_REQUIRED_SLOT_KEYS,
+    disambiguate_slot_time,
+    has_period_hint,
+    parse_time_text,
+    resolve_episode_time,
+)
 
 # 敏感类别关键词兜底：模型漏标时仍能拦截；词表保守，避免误伤常见表达
 _SENSITIVE_KEYWORDS: dict[str, tuple[str, ...]] = {
@@ -59,6 +68,11 @@ def _keyword_sensitive(texts: list[str]) -> tuple[str, str] | None:
             if any(keyword in text for text in texts):
                 return category, keyword
     return None
+
+
+def _looks_like_commute_mode(value_text: str) -> bool:
+    """通勤槽位的值是否为交通方式（开车、地铁等），是则降级为偏好。"""
+    return any(word in value_text for word in COMMUTE_MODE_WORDS)
 
 
 @dataclass(frozen=True)
@@ -196,6 +210,7 @@ def validate_candidate(
 
     type_ = candidate.type
     slot_key = candidate.slot_key
+    spec = candidate.scope
     if type_ == "slot":
         if slot_key not in SLOT_KEYS:
             if not candidate.subject.strip():
@@ -203,6 +218,16 @@ def validate_candidate(
             type_ = "preference"
             slot_key = None
             notes.append("slot_key_invalid_downgraded")
+        else:
+            rule = (spec.rule or "").strip()
+            if slot_key == "fixed_event":
+                # 固定事件必须是 recurring 且带 rule；不要求钟点
+                if spec.kind != "recurring" or not rule:
+                    return RejectedCandidate(candidate, "rejected:slot_scope")
+            elif spec.kind == "recurring" and not rule:
+                # 模型常把日常锚点写成 recurring 却漏 rule：确定性地归一化为 persistent
+                spec = ScopeSpec(kind="persistent")
+                notes.append("slot_scope_normalized")
     elif type_ == "episode":
         if candidate.confidence < 0.6:
             return RejectedCandidate(candidate, "rejected:episode_low_confidence")
@@ -210,16 +235,35 @@ def validate_candidate(
     value: dict = {"text": candidate.value_text.strip()}
     if type_ == "slot" and slot_key in TIME_SLOT_KEYS:
         parsed_time = parse_time_text(candidate.time_text or candidate.value_text)
-        if parsed_time is None:
+        if parsed_time is not None:
+            value["time"] = disambiguate_slot_time(slot_key, parsed_time)
+        elif slot_key in PERIOD_SLOT_KEYS and has_period_hint(
+            candidate.time_text or candidate.value_text
+        ):
+            pass  # energy_peak 允许只给时段词：保留槽位，不写 time
+        elif slot_key == "commute" and _looks_like_commute_mode(candidate.value_text):
+            type_ = "preference"
+            slot_key = None
+            notes.append("slot_commute_mode_downgraded")
+        elif slot_key in TIME_REQUIRED_SLOT_KEYS:
+            type_ = "preference"
+            slot_key = None
+            notes.append("slot_time_unparsed_downgraded")
+        else:
             return RejectedCandidate(candidate, "rejected:slot_time_unparsed")
-        value["time"] = disambiguate_slot_time(slot_key, parsed_time)
     elif candidate.time_text:
-        parsed_time = parse_time_text(candidate.time_text)
+        if type_ == "episode":
+            evidence_text = " ".join(
+                event_index[item.event_id].text for item in evidences
+            )
+            parsed_time = resolve_episode_time(evidence_text, candidate.time_text)
+        else:
+            parsed_time = parse_time_text(candidate.time_text)
         if parsed_time is not None:
             value["time"] = parsed_time
 
     first_event_time = event_index[evidences[0].event_id].occurred_at
-    scope = normalize_scope(candidate.scope, first_event_time, user.timezone, user.day_start)
+    scope = normalize_scope(spec, first_event_time, user.timezone, user.day_start)
     if scope is None:
         return RejectedCandidate(candidate, "rejected:scope_unparsed")
 

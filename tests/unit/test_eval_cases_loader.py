@@ -44,3 +44,38 @@ def test_check_cases_accepts_quoted_scope_kind(tmp_path: Path) -> None:
     done = _run_check(good)
     assert done.returncode == 0
     assert "校验通过" in done.stdout
+
+
+_OVERRIDE_BASE = """
+meta:
+  now: "2026-11-06T10:00:00+08:00"
+  tz: Asia/Shanghai
+  day_start: "04:00"
+cases:
+  - id: loader02
+    now: "{now}"
+    tz: Asia/Shanghai
+    day_start: "04:00"
+    text: "今天加班到九点"
+    expect:
+      - type: episode
+        scope_kind: 'on'
+"""
+
+
+def test_check_cases_accepts_case_level_now(tmp_path: Path) -> None:
+    good = tmp_path / "cases_override.yaml"
+    good.write_text(
+        _OVERRIDE_BASE.format(now="2026-11-07T01:30:00+08:00"), encoding="utf-8"
+    )
+    done = _run_check(good)
+    assert done.returncode == 0
+    assert "校验通过" in done.stdout
+
+
+def test_check_cases_rejects_invalid_case_now(tmp_path: Path) -> None:
+    bad = tmp_path / "cases_bad_now.yaml"
+    bad.write_text(_OVERRIDE_BASE.format(now="第二天凌晨"), encoding="utf-8")
+    done = _run_check(bad)
+    assert done.returncode != 0
+    assert "now" in done.stdout + done.stderr

@@ -12,8 +12,8 @@ from app.memory.extract import (
 CASES_PATH = Path(__file__).resolve().parents[1] / "evals" / "memory_cases.yaml"
 
 
-def test_extractor_version_is_v2() -> None:
-    assert EXTRACTOR_VERSION == "memory-extract-v2"
+def test_extractor_version_is_v2_1() -> None:
+    assert EXTRACTOR_VERSION == "memory-extract-v2.1"
 
 
 def test_few_shot_counts() -> None:

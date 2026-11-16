@@ -14,7 +14,7 @@ from app.llm.gateway import LLMGateway
 from app.memory.schemas import ExtractionResult
 from app.memory.validate import EventRecord
 
-EXTRACTOR_VERSION = "memory-extract-v2"
+EXTRACTOR_VERSION = "memory-extract-v2.1"
 EXTRACT_ALIAS = "memory_extract"
 MAX_RELATED_MEMORIES = 10
 
