@@ -14,7 +14,7 @@ from app.llm.gateway import LLMGateway
 from app.memory.schemas import ExtractionResult
 from app.memory.validate import EventRecord
 
-EXTRACTOR_VERSION = "memory-extract-v2.3"
+EXTRACTOR_VERSION = "memory-extract-v2.4"
 EXTRACT_ALIAS = "memory_extract"
 MAX_RELATED_MEMORIES = 10
 
@@ -52,7 +52,7 @@ SYSTEM_PROMPT = """你是记忆抽取器，只做一件事：从给定事件中�
 3. type 只能是 slot | preference | episode。
 4. slot 只用于长期稳定的作息锚点，slot_key 只能是 work_start | work_end | lunch | sleep | wake | commute | energy_peak | fixed_event；slot 的 scope 只能是 persistent 或 recurring。
 5. episode 必须有明确日期锚点（今天、明天、后天、昨天、本周X、下周X、月底这一类的 date_text），并且满足下列之一：
-   (a) 偏离常规且影响时间、精力或可用性，例如加班、睡过头、没吃饭、提前下班、居家办公、身体不适；
+   (a) 偏离常规且影响时间、精力或可用性，例如加班、睡过头、没吃饭、提前下班、居家办公、身体不适；带「就」「才」的作息表述（早起、晚睡、提前出门）视为偏离常规，confidence 不低于 0.7；
    (b) 带日期的具体事件，且会占用用户时间或影响可用性。
    episode 的 scope 必须是 on 或 until，date_text 原样抄写用户说法，不要自己换算成日期。
 6. 以下内容一律不抽：常规范围内的琐事（吃了什么、喝了什么、穿了什么、路上看到什么）、心情与天气、假设与条件句、疑问句、转述与第三方信息、助手自己说过的话、可以表达为任务或时间块的内容（一次性开会、出差、聚餐、缴费、截止日期、让我提醒你）。
