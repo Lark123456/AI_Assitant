@@ -1,39 +1,20 @@
 import '../models/card_action.dart';
-import '../models/chat_event.dart';
-import '../models/conversation.dart';
-import '../models/invite.dart';
+import '../models/chat_message.dart';
 
-/// Chat 数据来源：事件订阅 + 快照 + 发送/卡片应答/邀请。
+/// Chat 数据来源：一条消息流 + 发送 + 卡片应答。
+///
+/// U1 只有 Friday 主对话；没有事件序号、快照、基线与摘要。
+/// 流式回复通过同一个 `watchMessages()` 流实现：文本消息带 `streaming` 标志，
+/// 文字随每次发射逐步增长。
 abstract interface class ChatRepository {
-  Future<Conversation> loadMainConversation();
+  Stream<List<ChatMessage>> watchMessages();
 
-  Future<List<Conversation>> loadTopicConversations();
+  Future<void> sendText(String text);
 
-  Future<Conversation> getConversation(String conversationId);
-
-  /// 先订阅，保证不漏事件；随后再取快照。
-  Stream<ChatEvent> watchConversation(String conversationId);
-
-  Future<ConversationSnapshot> loadConversationSnapshot(String conversationId);
-
-  /// 手动重试同步：不取消订阅、重置退避计数并重新走一次重同步流程。
-  Future<void> retrySync(String conversationId);
-
-  /// `clientMessageId` 由 Controller 生成；确认事件必须复用同一 id。
-  Future<void> sendText({
-    required String conversationId,
-    required String clientMessageId,
-    required String text,
-  });
-
-  /// 仅用于 Confirm / Choice / Memory / PlanProposal。
+  /// Confirm / Choice / Memory / PlanProposal 使用各自的 CardAction；
+  /// JarvisIntroCard 用 `ConfirmAction(confirmed: true/false)` 表示接受/拒绝。
   Future<void> respondToCard({
-    required String conversationId,
     required String messageId,
     required CardAction action,
   });
-
-  Future<InviteAcceptResult> acceptInvite(String inviteId);
-
-  Future<InviteDeclineResult> declineInvite(String inviteId);
 }

@@ -1,16 +1,13 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mobile/domain/enums.dart';
-import 'package:mobile/domain/models/alert.dart';
 import 'package:mobile/domain/models/card_action.dart';
 import 'package:mobile/domain/models/chat_message.dart';
 import 'package:mobile/domain/models/today.dart';
 
 ChoiceCard _choiceCard({List<String>? options, String? answer}) => ChoiceCard(
   id: 'm-1',
-  conversationId: 'c-1',
   sender: ChatSender.friday,
   createdAt: DateTime(2026, 11, 15, 9),
-  seq: 1,
   question: '选哪个时段',
   options: options ?? <String>['上午', '下午'],
   answer: answer,
@@ -34,25 +31,6 @@ TodayItem _todayItem({
   start: start,
   end: end,
   durationMin: durationMin,
-);
-
-PriorityAlert _alert({
-  AlertStatus status = AlertStatus.pending,
-  String? handledActionId,
-  List<AlertAction>? actions,
-}) => PriorityAlert(
-  alertId: 'a-1',
-  priority: AlertPriority.urgent,
-  reason: '会议 5 分钟后开始',
-  actions:
-      actions ??
-      const [
-        AlertAction(actionId: 'open', label: '查看'),
-        AlertAction(actionId: 'dismiss', label: '忽略'),
-      ],
-  status: status,
-  createdAt: DateTime(2026, 11, 15, 9),
-  handledActionId: handledActionId,
 );
 
 void main() {
@@ -110,10 +88,8 @@ void main() {
       expect(
         () => MemoryConfirmCard(
           id: 'm-2',
-          conversationId: 'c-1',
           sender: ChatSender.friday,
           createdAt: DateTime(2026, 11, 15, 9),
-          seq: 2,
           items: const [],
         ),
         throwsA(isA<AssertionError>()),
@@ -121,10 +97,8 @@ void main() {
       expect(
         () => MemoryConfirmCard(
           id: 'm-2',
-          conversationId: 'c-1',
           sender: ChatSender.friday,
           createdAt: DateTime(2026, 11, 15, 9),
-          seq: 2,
           items: const [
             MemoryCandidateItem(itemId: 'a', label: '偏好'),
             MemoryCandidateItem(itemId: 'a', label: '重复'),
@@ -135,10 +109,8 @@ void main() {
 
       final card = MemoryConfirmCard(
         id: 'm-2',
-        conversationId: 'c-1',
         sender: ChatSender.friday,
         createdAt: DateTime(2026, 11, 15, 9),
-        seq: 2,
         items: const [MemoryCandidateItem(itemId: 'a', label: '偏好')],
       );
       expect(() => card.items.clear(), throwsA(isA<UnsupportedError>()));
@@ -151,10 +123,8 @@ void main() {
       ];
       final card = PlanProposalCard(
         id: 'm-3',
-        conversationId: 'c-1',
         sender: ChatSender.jarvis,
         createdAt: DateTime(2026, 11, 15, 9),
-        seq: 3,
         summary: '调整本周',
         changes: source,
         rationale: '本周有考试',
@@ -166,10 +136,8 @@ void main() {
       expect(
         () => PlanProposalCard(
           id: 'm-3',
-          conversationId: 'c-1',
           sender: ChatSender.jarvis,
           createdAt: DateTime(2026, 11, 15, 9),
-          seq: 3,
           summary: '调整本周',
           changes: const [],
           rationale: '本周有考试',
@@ -259,115 +227,6 @@ void main() {
             .copyWith(status: TodayItemStatus.done)
             .isOverdueAt(DateTime(2026, 11, 15, 12)),
         isFalse,
-      );
-    });
-  });
-
-  group('PriorityAlert', () {
-    test('handled 必须携带属于 actions 的 handledActionId', () {
-      expect(
-        () => _alert(status: AlertStatus.handled),
-        throwsA(isA<AssertionError>()),
-      );
-      expect(
-        () => _alert(status: AlertStatus.handled, handledActionId: 'missing'),
-        throwsA(isA<AssertionError>()),
-      );
-
-      final alert = _alert(
-        status: AlertStatus.handled,
-        handledActionId: 'open',
-      );
-      expect(alert.handledActionId, 'open');
-    });
-
-    test('非 handled 不得携带 handledActionId', () {
-      expect(
-        () => _alert(handledActionId: 'open'),
-        throwsA(isA<AssertionError>()),
-      );
-    });
-
-    test('actions 非空、id 非空且唯一', () {
-      expect(() => _alert(actions: const []), throwsA(isA<AssertionError>()));
-      expect(
-        () => _alert(
-          actions: const [
-            AlertAction(actionId: 'open', label: '查看'),
-            AlertAction(actionId: 'open', label: '打开'),
-          ],
-        ),
-        throwsA(isA<AssertionError>()),
-      );
-      expect(
-        () => _alert(
-          actions: [AlertAction(actionId: '', label: '查看')],
-        ),
-        throwsA(isA<AssertionError>()),
-      );
-      expect(
-        () => _alert(
-          actions: [AlertAction(actionId: 'open', label: '')],
-        ),
-        throwsA(isA<AssertionError>()),
-      );
-    });
-
-    test('actions 为不可变视图', () {
-      final source = <AlertAction>[
-        const AlertAction(actionId: 'open', label: '查看'),
-      ];
-      final alert = _alert(actions: source);
-
-      source.clear();
-      expect(alert.actions.length, 1);
-      expect(() => alert.actions.clear(), throwsA(isA<UnsupportedError>()));
-    });
-  });
-
-  group('AlertResumeContext 字段联动', () {
-    test('无对话时其余定位字段必须为空', () {
-      final context = AlertResumeContext(
-        previousRoute: '/today',
-        capturedAt: DateTime(2026, 11, 15, 9),
-      );
-      expect(context.conversationId, isNull);
-      expect(context.messageId, isNull);
-
-      expect(
-        () => AlertResumeContext(
-          previousRoute: '/today',
-          capturedAt: DateTime(2026, 11, 15, 9),
-          messageId: 'm-1',
-        ),
-        throwsA(isA<AssertionError>()),
-      );
-      expect(
-        () => AlertResumeContext(
-          previousRoute: '/today',
-          capturedAt: DateTime(2026, 11, 15, 9),
-          draftText: '草稿',
-        ),
-        throwsA(isA<AssertionError>()),
-      );
-    });
-
-    test('scrollOffset 非负，previousRoute 非空', () {
-      expect(
-        () => AlertResumeContext(
-          previousRoute: '/chat/c-1',
-          capturedAt: DateTime(2026, 11, 15, 9),
-          conversationId: 'c-1',
-          scrollOffset: -1,
-        ),
-        throwsA(isA<AssertionError>()),
-      );
-      expect(
-        () => AlertResumeContext(
-          previousRoute: '',
-          capturedAt: DateTime(2026, 11, 15, 9),
-        ),
-        throwsA(isA<AssertionError>()),
       );
     });
   });

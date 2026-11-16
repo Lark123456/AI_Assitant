@@ -1,16 +1,9 @@
-/// 领域枚举，对应 docs/mobile-u1-technical-plan.md 4.1。
+/// U1 领域枚举，对应 docs/mobile-u1-plan.md 第三章。
 ///
 /// 命名约定：
 /// - `ChatSender` 只表示消息发送者，包含 user
-/// - `ConversationAgent` 只表示对话负责方，不含 user
-/// - `SyncState` 表示条目/消息的同步状态；`NetworkStatus` 表示整体网络状态，二者不可混用
+/// - `SyncState` 表示消息/条目的同步状态；`NetworkStatus` 表示整体网络状态，二者不可混用
 library;
-
-enum ConversationType { main, topic }
-
-enum ConversationAgent { friday, jarvis }
-
-enum ConversationStatus { active, archived }
 
 enum ChatSender { user, friday, jarvis }
 
@@ -25,8 +18,6 @@ enum TodayItemStatus { planned, inProgress, done, skipped }
 
 enum BriefKind { morning, evening }
 
-enum ConversationSyncState { syncing, synced, retrying, failed }
-
 enum ConfirmCardState { pending, confirmed, revoked }
 
 enum PlanDecision { accept, adjust, veto }
@@ -37,18 +28,6 @@ enum PlanChangeType { add, remove, move }
 
 enum MemoryCandidateState { pending, confirmed, rejected }
 
-enum AgentInviteStatus { pending, accepted, declined, expired }
-
 enum ThinkingPhase { thinking, organizing, drafting, executing }
 
-enum AlertPriority { urgent }
-
-enum AlertStatus { pending, handled, dismissed }
-
-enum InviteRejectReason {
-  declined,
-  expired,
-  notFound,
-  notOwner,
-  alreadyAccepted,
-}
+enum JarvisIntroState { open, accepted, declined }

@@ -17,8 +17,6 @@ class TodayItem {
     this.durationMin,
     this.sourceTag,
     this.reason,
-    this.projectId,
-    this.projectTitle,
   }) : assert(id != '', 'id must not be empty'),
        assert(title != '', 'title must not be empty'),
        assert(
@@ -54,8 +52,6 @@ class TodayItem {
   final int? durationMin;
   final String? sourceTag;
   final String? reason;
-  final String? projectId;
-  final String? projectTitle;
 
   /// overdue 是派生状态，不写入 status，也不参与持久化。
   /// block 以 end 为准；reminder 有 10 分钟宽限；task 以 start 为准。
@@ -114,8 +110,6 @@ class TodayItem {
       durationMin: durationMin,
       sourceTag: sourceTag,
       reason: reason,
-      projectId: projectId,
-      projectTitle: projectTitle,
     );
   }
 }

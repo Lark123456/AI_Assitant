@@ -2,41 +2,12 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:mobile/domain/enums.dart';
 import 'package:mobile/domain/errors.dart';
 import 'package:mobile/domain/models/chat_message.dart';
-import 'package:mobile/domain/models/conversation.dart';
 import 'package:mobile/domain/models/today.dart';
-
-Conversation _mainConversation() => Conversation(
-  conversationId: 'c-main',
-  type: ConversationType.main,
-  agent: ConversationAgent.friday,
-  status: ConversationStatus.active,
-  createdAt: DateTime(2026, 11, 15, 8),
-  lastActivityAt: DateTime(2026, 11, 15, 9),
-);
-
-Conversation _topicConversation({
-  String? projectId = 'p-1',
-  String? projectTitle = '项目一',
-}) => Conversation(
-  conversationId: 'c-topic',
-  type: ConversationType.topic,
-  agent: ConversationAgent.jarvis,
-  status: ConversationStatus.active,
-  createdAt: DateTime(2026, 11, 15, 8),
-  lastActivityAt: DateTime(2026, 11, 15, 9),
-  projectId: projectId,
-  projectTitle: projectTitle,
-  topic: '学习计划',
-  goal: '完成课程',
-  scopeSummary: '每周复盘',
-);
 
 ConfirmCard _confirmCard() => ConfirmCard(
   id: 'm-1',
-  conversationId: 'c-1',
   sender: ChatSender.friday,
   createdAt: DateTime(2026, 11, 15, 9),
-  seq: 1,
   title: '确认日程',
   body: '是否加入今天',
   primaryLabel: '加入',
@@ -45,10 +16,8 @@ ConfirmCard _confirmCard() => ConfirmCard(
 
 ChoiceCard _choiceCard({String? answer}) => ChoiceCard(
   id: 'm-2',
-  conversationId: 'c-1',
   sender: ChatSender.friday,
   createdAt: DateTime(2026, 11, 15, 9),
-  seq: 2,
   question: '选哪个时段',
   options: const ['上午', '下午'],
   answer: answer,
@@ -58,36 +27,23 @@ PlanProposalCard _planCard({
   PlanProposalState state = PlanProposalState.pending,
 }) => PlanProposalCard(
   id: 'm-3',
-  conversationId: 'c-1',
   sender: ChatSender.jarvis,
   createdAt: DateTime(2026, 11, 15, 9),
-  seq: 3,
   summary: '调整本周计划',
   changes: const [PlanChange(type: PlanChangeType.move, title: '移动作业')],
   rationale: '本周有考试',
   state: state,
 );
 
-AgentInviteCard _inviteCard({
-  AgentInviteStatus status = AgentInviteStatus.pending,
-  String? createdConversationId,
-  bool accepting = false,
-}) => AgentInviteCard(
+JarvisIntroCard _jarvisIntroCard({
+  JarvisIntroState state = JarvisIntroState.open,
+}) => JarvisIntroCard(
   id: 'm-4',
-  conversationId: 'c-1',
   sender: ChatSender.friday,
   createdAt: DateTime(2026, 11, 15, 9),
-  seq: 4,
-  inviteId: 'i-1',
-  initiatorAgent: ConversationAgent.friday,
-  targetAgent: ConversationAgent.jarvis,
-  topic: '简历优化',
-  goal: '改到可投递',
-  scopeSummary: '结构与措辞',
-  expectedOutcome: '一版简历',
-  status: status,
-  createdConversationId: createdConversationId,
-  accepting: accepting,
+  summary: '预计需要 20 分钟',
+  previewQuestions: const ['最近在忙什么', '希望先解决哪一块'],
+  state: state,
 );
 
 TodayItem _blockItem() => TodayItem(
@@ -123,67 +79,6 @@ TodayItem _taskItem({DateTime? start}) => TodayItem(
 );
 
 void main() {
-  group('Conversation.copyWith 哨兵语义', () {
-    test('不传参数保持原值', () {
-      final source = _topicConversation();
-      final copy = source.copyWith();
-
-      expect(copy.status, source.status);
-      expect(copy.projectId, 'p-1');
-      expect(copy.projectTitle, '项目一');
-      expect(copy.lastActivityAt, source.lastActivityAt);
-    });
-
-    test('不传 projectTitle 保持；显式 null 清空', () {
-      final source = _topicConversation();
-
-      expect(
-        source.copyWith(status: ConversationStatus.archived).projectTitle,
-        '项目一',
-      );
-      expect(source.copyWith(projectTitle: null).projectTitle, isNull);
-    });
-
-    test('更新 lastActivityAt 与 status', () {
-      final source = _mainConversation();
-      final next = DateTime(2026, 11, 15, 12);
-      final copy = source.copyWith(
-        status: ConversationStatus.archived,
-        lastActivityAt: next,
-      );
-
-      expect(copy.status, ConversationStatus.archived);
-      expect(copy.lastActivityAt, next);
-    });
-
-    test('专题对话显式清空 projectId 触发断言', () {
-      final source = _topicConversation();
-
-      expect(
-        () => source.copyWith(projectId: null),
-        throwsA(isA<AssertionError>()),
-      );
-    });
-
-    test('主对话设置 projectId 触发断言', () {
-      final source = _mainConversation();
-
-      expect(
-        () => source.copyWith(projectId: 'p-9'),
-        throwsA(isA<AssertionError>()),
-      );
-    });
-
-    test('lastActivityAt 早于 createdAt 触发断言', () {
-      final source = _mainConversation();
-
-      expect(
-        () => source.copyWith(lastActivityAt: DateTime(2026, 11, 15, 7)),
-        throwsA(isA<AssertionError>()),
-      );
-    });
-  });
-
   group('ConfirmCard.copyWith 状态转换', () {
     test('pending 不传参数保持 actedAt 为空', () {
       final source = _confirmCard();
@@ -274,10 +169,8 @@ void main() {
     test('更新 items 保持不可变视图', () {
       final source = MemoryConfirmCard(
         id: 'm-5',
-        conversationId: 'c-1',
         sender: ChatSender.friday,
         createdAt: DateTime(2026, 11, 15, 9),
-        seq: 5,
         items: const [MemoryCandidateItem(itemId: 'a', label: '偏好')],
       );
 
@@ -297,10 +190,8 @@ void main() {
     test('空列表与重复 itemId 触发断言', () {
       final source = MemoryConfirmCard(
         id: 'm-5',
-        conversationId: 'c-1',
         sender: ChatSender.friday,
         createdAt: DateTime(2026, 11, 15, 9),
-        seq: 5,
         items: const [MemoryCandidateItem(itemId: 'a', label: '偏好')],
       );
 
@@ -345,60 +236,33 @@ void main() {
     });
   });
 
-  group('AgentInviteCard.copyWith 状态与 createdConversationId', () {
-    test('pending 不传 createdConversationId 保持为空', () {
-      final source = _inviteCard();
+  group('JarvisIntroCard.copyWith 状态', () {
+    test('open 可接受或拒绝', () {
+      final source = _jarvisIntroCard();
 
-      expect(source.copyWith().createdConversationId, isNull);
-      expect(source.copyWith(accepting: true).accepting, isTrue);
+      expect(
+        source.copyWith(state: JarvisIntroState.accepted).state,
+        JarvisIntroState.accepted,
+      );
+      expect(
+        source.copyWith(state: JarvisIntroState.declined).state,
+        JarvisIntroState.declined,
+      );
+      expect(source.copyWith().state, JarvisIntroState.open);
     });
 
-    test('accepted 必须携带 createdConversationId', () {
-      final source = _inviteCard();
+    test('终态不可回退或互转', () {
+      final accepted = _jarvisIntroCard(state: JarvisIntroState.accepted);
 
       expect(
-        () => source.copyWith(status: AgentInviteStatus.accepted),
+        () => accepted.copyWith(state: JarvisIntroState.open),
         throwsA(isA<StateTransitionException>()),
       );
       expect(
-        source
-            .copyWith(
-              status: AgentInviteStatus.accepted,
-              createdConversationId: 'c-new',
-            )
-            .createdConversationId,
-        'c-new',
-      );
-    });
-
-    test('非 accepted 携带 createdConversationId 抛运行时异常', () {
-      final source = _inviteCard();
-
-      expect(
-        () => source.copyWith(createdConversationId: 'c-new'),
+        () => accepted.copyWith(state: JarvisIntroState.declined),
         throwsA(isA<StateTransitionException>()),
       );
-      expect(
-        () => source.copyWith(createdConversationId: ''),
-        throwsA(isA<StateTransitionException>()),
-      );
-    });
-
-    test('accepted 不可回退，且不可保持 accepting', () {
-      final source = _inviteCard(
-        status: AgentInviteStatus.accepted,
-        createdConversationId: 'c-new',
-      );
-
-      expect(
-        () => source.copyWith(status: AgentInviteStatus.pending),
-        throwsA(isA<StateTransitionException>()),
-      );
-      expect(
-        () => source.copyWith(accepting: true),
-        throwsA(isA<StateTransitionException>()),
-      );
-      expect(source.copyWith().status, AgentInviteStatus.accepted);
+      expect(accepted.copyWith().state, JarvisIntroState.accepted);
     });
   });
 

@@ -2,37 +2,21 @@ import '../enums.dart';
 import '../errors.dart';
 import 'unset.dart';
 
-/// 聊天消息基类；`seq` 由仓库分配，正式消息不得由前端生成。
+/// 聊天消息基类；U1 只有一条 Friday 主对话，因此不含会话字段与事件序号。
 ///
-/// 正式事件序号：与产生该消息的 `MessageUpsert.seq` 相等，用于排序/去重/缺口检测，必须 > 0。
-/// 本地 pending / queued / failed 使用负数临时值（-1、-2、…），仅用于本地排序，
-/// 不是正式事件序号，不参与连续性检查，也不写入 `lastSeq`。
+/// 排序规则：`createdAt` 升序；相同时按 `id` 字典序，保证稳定。
 sealed class ChatMessage {
   const ChatMessage({
     required this.id,
-    required this.conversationId,
     required this.sender,
     required this.createdAt,
-    required this.seq,
     this.reason,
     this.syncState = SyncState.synced,
-  }) : assert(id != '', 'message id must not be empty'),
-       assert(conversationId != '', 'conversationId must not be empty'),
-       assert(seq != 0, 'seq must be positive (formal) or negative (local)'),
-       assert(
-         syncState != SyncState.synced || seq > 0,
-         'synced message requires a positive seq',
-       ),
-       assert(
-         syncState == SyncState.synced || seq < 0,
-         'pending/queued/failed message requires a negative seq',
-       );
+  }) : assert(id != '', 'message id must not be empty');
 
   final String id; // 全局唯一
-  final String conversationId; // 必填
   final ChatSender sender;
   final DateTime createdAt;
-  final int seq;
   final String? reason; // 主动消息的理由
   final SyncState syncState;
 }
@@ -40,10 +24,8 @@ sealed class ChatMessage {
 final class TextMessage extends ChatMessage {
   const TextMessage({
     required super.id,
-    required super.conversationId,
     required super.sender,
     required super.createdAt,
-    required super.seq,
     super.reason,
     super.syncState,
     this.text = '',
@@ -54,27 +36,12 @@ final class TextMessage extends ChatMessage {
   final bool streaming;
 
   TextMessage copyWith({String? text, bool? streaming, SyncState? syncState}) {
-    final nextSyncState = syncState ?? this.syncState;
-    if (nextSyncState == SyncState.synced && seq <= 0) {
-      throw StateTransitionException(
-        model: 'TextMessage',
-        from: this.syncState.name,
-        to: nextSyncState.name,
-        reason: 'local message cannot become synced without a formal seq',
-      );
-    }
-    assert(
-      nextSyncState != SyncState.synced || seq > 0,
-      'cannot mark a local message as synced without a formal seq',
-    );
     return TextMessage(
       id: id,
-      conversationId: conversationId,
       sender: sender,
       createdAt: createdAt,
-      seq: seq,
       reason: reason,
-      syncState: nextSyncState,
+      syncState: syncState ?? this.syncState,
       text: text ?? this.text,
       streaming: streaming ?? this.streaming,
     );
@@ -84,10 +51,8 @@ final class TextMessage extends ChatMessage {
 final class ConfirmCard extends ChatMessage {
   const ConfirmCard({
     required super.id,
-    required super.conversationId,
     required super.sender,
     required super.createdAt,
-    required super.seq,
     super.reason,
     super.syncState,
     required this.title,
@@ -143,10 +108,8 @@ final class ConfirmCard extends ChatMessage {
     );
     return ConfirmCard(
       id: id,
-      conversationId: conversationId,
       sender: sender,
       createdAt: createdAt,
-      seq: seq,
       reason: reason,
       syncState: syncState,
       title: title,
@@ -163,10 +126,8 @@ final class ChoiceCard extends ChatMessage {
   // 含集合元素判断与不可变复制，构造函数不能是 const
   ChoiceCard({
     required super.id,
-    required super.conversationId,
     required super.sender,
     required super.createdAt,
-    required super.seq,
     super.reason,
     super.syncState,
     required this.question,
@@ -224,10 +185,8 @@ final class ChoiceCard extends ChatMessage {
     );
     return ChoiceCard(
       id: id,
-      conversationId: conversationId,
       sender: sender,
       createdAt: createdAt,
-      seq: seq,
       reason: reason,
       syncState: syncState,
       question: question,
@@ -262,10 +221,8 @@ final class MemoryConfirmCard extends ChatMessage {
   // 含集合非空、唯一性与不可变复制，构造函数不能是 const
   MemoryConfirmCard({
     required super.id,
-    required super.conversationId,
     required super.sender,
     required super.createdAt,
-    required super.seq,
     super.reason,
     super.syncState,
     required List<MemoryCandidateItem> items,
@@ -295,10 +252,8 @@ final class MemoryConfirmCard extends ChatMessage {
     );
     return MemoryConfirmCard(
       id: id,
-      conversationId: conversationId,
       sender: sender,
       createdAt: createdAt,
-      seq: seq,
       reason: reason,
       syncState: syncState,
       items: nextItems,
@@ -319,10 +274,8 @@ final class PlanProposalCard extends ChatMessage {
   // 含集合非空与不可变复制，构造函数不能是 const
   PlanProposalCard({
     required super.id,
-    required super.conversationId,
     required super.sender,
     required super.createdAt,
-    required super.seq,
     super.reason,
     super.syncState,
     required this.summary,
@@ -357,10 +310,8 @@ final class PlanProposalCard extends ChatMessage {
     );
     return PlanProposalCard(
       id: id,
-      conversationId: conversationId,
       sender: sender,
       createdAt: createdAt,
-      seq: seq,
       reason: reason,
       syncState: syncState,
       summary: summary,
@@ -371,157 +322,62 @@ final class PlanProposalCard extends ChatMessage {
   }
 }
 
-final class AgentInviteCard extends ChatMessage {
-  const AgentInviteCard({
+/// Jarvis 引荐卡片：不创建会话，接受后由假数据仓库在同一消息流追加后续消息。
+final class JarvisIntroCard extends ChatMessage {
+  // 含集合非空、唯一性与不可变复制，构造函数不能是 const
+  JarvisIntroCard({
     required super.id,
-    required super.conversationId,
     required super.sender,
     required super.createdAt,
-    required super.seq,
     super.reason,
     super.syncState,
-    required this.inviteId,
-    required this.initiatorAgent,
-    required this.targetAgent,
-    required this.topic,
-    required this.goal,
-    required this.scopeSummary,
-    required this.expectedOutcome,
-    this.projectId,
-    this.status = AgentInviteStatus.pending,
-    this.createdConversationId,
-    this.accepting = false,
-  }) : assert(inviteId != '', 'inviteId must not be empty'),
+    required this.summary,
+    required List<String> previewQuestions,
+    this.state = JarvisIntroState.open,
+  }) : previewQuestions = List<String>.unmodifiable(previewQuestions),
+       assert(summary != '', 'summary must not be empty'),
        assert(
-         targetAgent == ConversationAgent.jarvis,
-         'U1 invite target must be jarvis',
+         previewQuestions.isNotEmpty && previewQuestions.length <= 3,
+         'jarvis intro requires 1-3 preview questions',
        ),
        assert(
-         topic != '' &&
-             goal != '' &&
-             scopeSummary != '' &&
-             expectedOutcome != '',
-         'invite requires topic/goal/scopeSummary/expectedOutcome',
+         previewQuestions.every((q) => q != ''),
+         'preview questions must not be empty',
        ),
        assert(
-         status == AgentInviteStatus.pending || !accepting,
-         'accepting is only allowed while pending',
-       ),
-       assert(
-         status != AgentInviteStatus.accepted || createdConversationId != null,
-         'accepted invite requires createdConversationId',
-       ),
-       assert(
-         status == AgentInviteStatus.accepted || createdConversationId == null,
-         'unaccepted invite must not have createdConversationId',
-       ),
-       assert(
-         createdConversationId == null || createdConversationId != '',
-         'createdConversationId must not be empty',
+         previewQuestions.toSet().length == previewQuestions.length,
+         'preview questions must be unique',
        );
 
-  final String inviteId;
-  final ConversationAgent initiatorAgent; // 不含 user
-  final ConversationAgent targetAgent; // U1 固定 jarvis
-  final String? projectId;
-  final String topic;
-  final String goal;
-  final String scopeSummary;
-  final String expectedOutcome;
-  final AgentInviteStatus status;
-  final String? createdConversationId; // 接受后回填
-  final bool accepting; // UI 处理中，防重复点击
+  final String summary; // 粗估说明
+  final List<String> previewQuestions; // 最多 3 个
+  final JarvisIntroState state;
 
-  /// `accepted` 必须携带 `createdConversationId`；非 `accepted` 必须为空。
-  AgentInviteCard copyWith({
-    AgentInviteStatus? status,
-    Object? createdConversationId = unset,
-    bool? accepting,
-  }) {
-    final nextStatus = status ?? this.status;
-    final nextCreatedConversationId = identical(createdConversationId, unset)
-        ? this.createdConversationId
-        : createdConversationId as String?;
-    final nextAccepting = accepting ?? this.accepting;
-    if (this.status != AgentInviteStatus.pending && nextStatus != this.status) {
+  /// 终态（accepted / declined）不可回到 open，也不可互转。
+  JarvisIntroCard copyWith({JarvisIntroState? state}) {
+    final nextState = state ?? this.state;
+    if (this.state != JarvisIntroState.open && nextState != this.state) {
       throw StateTransitionException(
-        model: 'AgentInviteCard',
-        from: this.status.name,
-        to: nextStatus.name,
-        reason: 'terminal invite cannot change status',
-      );
-    }
-    if (nextStatus != AgentInviteStatus.pending && nextAccepting) {
-      throw StateTransitionException(
-        model: 'AgentInviteCard',
-        from: this.status.name,
-        to: nextStatus.name,
-        reason: 'accepting is only allowed while pending',
-      );
-    }
-    if (nextStatus == AgentInviteStatus.accepted &&
-        nextCreatedConversationId == null) {
-      throw StateTransitionException(
-        model: 'AgentInviteCard',
-        from: this.status.name,
-        to: nextStatus.name,
-        reason: 'accepted invite requires createdConversationId',
-      );
-    }
-    if (nextStatus != AgentInviteStatus.accepted &&
-        nextCreatedConversationId != null) {
-      throw StateTransitionException(
-        model: 'AgentInviteCard',
-        from: this.status.name,
-        to: nextStatus.name,
-        reason: 'unaccepted invite must not have createdConversationId',
-      );
-    }
-    if (nextCreatedConversationId == '') {
-      throw StateTransitionException(
-        model: 'AgentInviteCard',
-        from: this.status.name,
-        to: nextStatus.name,
-        reason: 'createdConversationId must not be empty',
+        model: 'JarvisIntroCard',
+        from: this.state.name,
+        to: nextState.name,
+        reason: 'terminal jarvis intro cannot change state',
       );
     }
     assert(
-      nextStatus == AgentInviteStatus.pending || !nextAccepting,
-      'accepting is only allowed while pending',
+      !(this.state != JarvisIntroState.open &&
+          nextState == JarvisIntroState.open),
+      'terminal jarvis intro cannot return to open',
     );
-    assert(
-      nextStatus != AgentInviteStatus.accepted ||
-          nextCreatedConversationId != null,
-      'accepted invite requires createdConversationId',
-    );
-    assert(
-      nextStatus == AgentInviteStatus.accepted ||
-          nextCreatedConversationId == null,
-      'unaccepted invite must not have createdConversationId',
-    );
-    assert(
-      nextCreatedConversationId == null || nextCreatedConversationId != '',
-      'createdConversationId must not be empty',
-    );
-    return AgentInviteCard(
+    return JarvisIntroCard(
       id: id,
-      conversationId: conversationId,
       sender: sender,
       createdAt: createdAt,
-      seq: seq,
       reason: reason,
       syncState: syncState,
-      inviteId: inviteId,
-      initiatorAgent: initiatorAgent,
-      targetAgent: targetAgent,
-      topic: topic,
-      goal: goal,
-      scopeSummary: scopeSummary,
-      expectedOutcome: expectedOutcome,
-      projectId: projectId,
-      status: nextStatus,
-      createdConversationId: nextCreatedConversationId,
-      accepting: nextAccepting,
+      summary: summary,
+      previewQuestions: previewQuestions,
+      state: nextState,
     );
   }
 }
@@ -529,10 +385,8 @@ final class AgentInviteCard extends ChatMessage {
 final class ThinkingCard extends ChatMessage {
   const ThinkingCard({
     required super.id,
-    required super.conversationId,
     required super.sender,
     required super.createdAt,
-    required super.seq,
     super.reason,
     super.syncState,
     this.phase = ThinkingPhase.thinking,
@@ -543,10 +397,8 @@ final class ThinkingCard extends ChatMessage {
   ThinkingCard copyWith({ThinkingPhase? phase}) {
     return ThinkingCard(
       id: id,
-      conversationId: conversationId,
       sender: sender,
       createdAt: createdAt,
-      seq: seq,
       reason: reason,
       syncState: syncState,
       phase: phase ?? this.phase,

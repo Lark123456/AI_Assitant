@@ -1,6 +1,8 @@
 # Butler Mobile（U1）
 
-Flutter 子项目，对应计划 `docs/mobile-u1-technical-plan.md`（v2.4.4）。
+Flutter 子项目，对应 `docs/mobile-u1-plan.md`。
+历史技术报告已归档到 `docs/archive/mobile-u1-technical-plan-v2.4.4.md`（冻结）；
+会话同步、多会话与专题、邀请卡、PriorityAlert 见 `docs/deferred/mobile-sync-and-topics.md`（延后）。
 U1 只做客户端与 Mock，不连接真实后端。
 
 ## 环境
@@ -66,20 +68,19 @@ set "CLASSPATH=%APP_HOME%\gradle\wrapper\gradle-wrapper.jar"
 
 | 计划章节 | 本目录 |
 |---|---|
-| 3 架构与分层 | `lib/core`、`lib/domain`、`lib/data/mock`、`lib/features`、`lib/shell` |
-| 4 领域模型与仓库接口 | `lib/domain/models`、`lib/domain/repositories` |
-| 4.17 同步规则 | `lib/core/sync/conversation_sync_engine.dart` |
-| 5 设计系统 | `lib/core/theme` |
-| 6 导航外壳与路由 | `lib/shell` |
-| 7-9 Chat 与专题 | `lib/features/chat` |
-| 8 Today 页 | `lib/features/today` |
-| 10 全局紧急提醒 | `lib/shell/urgent_alert` |
-| 11 调试面板 | `lib/features/debug` |
+| 2 分层 | `lib/core`、`lib/domain`、`lib/data/mock`、`lib/features`、`lib/shell` |
+| 3 领域模型与卡片 | `lib/domain/models` |
+| 4 仓库接口 | `lib/domain/repositories` |
+| 5 Mock 语义 | `lib/data/mock` |
+| 6.1 导航外壳 | `lib/shell` |
+| 6.2-6.3 今日页与对话页 | `lib/features/today`、`lib/features/chat` |
+| 6.4 调试面板 | `lib/features/debug` |
+| 6.5 主题 | `lib/core/theme` |
 
 ## 调试面板
 
-debug 构建下长按 Today 页标题进入。支持模拟时间、网络状态、数据集、主题、文字缩放、紧急提醒、邀请与发送失败。
+debug 构建下长按 Today 页标题进入。支持模拟时间、网络状态、数据集、主题、文字缩放、Jarvis 引荐与发送失败。
 
 ## 截图
 
-存放于 `mobile/screenshots/`，使用虚构数据，按计划 13.3 提交。
+存放于 `mobile/screenshots/`，使用虚构数据，按 `docs/mobile-u1-plan.md` 验收章节提交。
