@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:intl/date_symbol_data_local.dart';
 import 'package:mobile/core/strings.dart';
+import 'package:mobile/features/today/today_page.dart';
 import 'package:mobile/main.dart';
 
 Finder _tab(String label) =>
@@ -13,6 +15,10 @@ Future<void> _pumpApp(WidgetTester tester) async {
 }
 
 void main() {
+  setUpAll(() async {
+    await initializeDateFormatting('zh_CN');
+  });
+
   testWidgets('默认进入今日 Tab 并显示四个入口', (tester) async {
     await _pumpApp(tester);
 
@@ -21,10 +27,11 @@ void main() {
     expect(_tab(S.tabChat), findsOneWidget);
     expect(_tab(S.tabTasks), findsOneWidget);
     expect(_tab(S.tabProfile), findsOneWidget);
-    expect(find.text(S.placeholderBody), findsOneWidget);
+    expect(find.byType(TodayPage), findsOneWidget);
+    expect(find.text(S.morningBrief), findsOneWidget);
   });
 
-  testWidgets('切换 Tab 显示对应占位页', (tester) async {
+  testWidgets('切换 Tab 显示对应页面', (tester) async {
     await _pumpApp(tester);
 
     await tester.tap(_tab(S.tabChat));
@@ -40,7 +47,7 @@ void main() {
     expect(find.text(S.profileNextStage), findsOneWidget);
   });
 
-  testWidgets('切回今日 Tab 仍显示今日占位页', (tester) async {
+  testWidgets('切回今日 Tab 仍显示今日页', (tester) async {
     await _pumpApp(tester);
 
     await tester.tap(_tab(S.tabChat));
@@ -48,6 +55,7 @@ void main() {
     await tester.tap(_tab(S.tabToday));
     await tester.pumpAndSettle();
 
-    expect(find.text(S.placeholderBody), findsOneWidget);
+    expect(find.byType(TodayPage), findsOneWidget);
+    expect(find.text(S.morningBrief), findsOneWidget);
   });
 }

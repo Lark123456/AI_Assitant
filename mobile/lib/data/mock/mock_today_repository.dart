@@ -4,25 +4,41 @@ import '../../domain/models/today.dart';
 import '../../domain/repositories/today_repository.dart';
 import 'mock_seed.dart';
 
+/// Mock Today 数据集：正常、空、加载失败。
+enum MockTodayDataset { normal, empty, error }
+
 /// 简单的内存 Today 仓库：固定数据集 + 模拟延迟。
 class MockTodayRepository implements TodayRepository {
   MockTodayRepository({
     required Clock clock,
     this.delay = const Duration(milliseconds: 250),
-  }) : _items = seedTodayItems(clock.now()),
-       _unscheduled = seedUnscheduledItems(),
-       _morningBrief = seedMorningBrief(),
-       _eveningBrief = seedEveningBrief();
+    this.dataset = MockTodayDataset.normal,
+  }) : _items = dataset == MockTodayDataset.normal
+           ? seedTodayItems(clock.now())
+           : [],
+       _unscheduled = dataset == MockTodayDataset.normal
+           ? seedUnscheduledItems()
+           : [],
+       _morningBrief = dataset == MockTodayDataset.normal
+           ? seedMorningBrief()
+           : null,
+       _eveningBrief = dataset == MockTodayDataset.normal
+           ? seedEveningBrief()
+           : null;
 
   final Duration delay;
+  final MockTodayDataset dataset;
   final List<TodayItem> _items;
   final List<TodayItem> _unscheduled;
-  final Brief _morningBrief;
-  final Brief _eveningBrief;
+  final Brief? _morningBrief;
+  final Brief? _eveningBrief;
 
   @override
   Future<DayView> loadDay(DateTime date) async {
     await Future<void>.delayed(delay);
+    if (dataset == MockTodayDataset.error) {
+      throw StateError('mock today load failed');
+    }
     return DayView(
       date: DateTime(date.year, date.month, date.day),
       items: _sortedItems(),

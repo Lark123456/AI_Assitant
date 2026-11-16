@@ -2,6 +2,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../core/strings.dart';
+import '../features/today/today_page.dart';
 import 'placeholder_page.dart';
 import 'shell_scaffold.dart';
 
@@ -23,8 +24,7 @@ GoRouter createAppRouter() => GoRouter(
           routes: [
             GoRoute(
               path: '/today',
-              builder: (context, state) =>
-                  const PlaceholderPage(title: S.tabToday),
+              builder: (context, state) => const TodayPage(),
             ),
           ],
         ),

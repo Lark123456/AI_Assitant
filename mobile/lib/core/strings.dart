@@ -40,4 +40,16 @@ abstract final class S {
   static const placeholderBody = '这一页将在后续批次实现';
   static const tasksNextStage = '任务页将在下一阶段提供';
   static const profileNextStage = '我的页将在下一阶段提供';
+
+  static const markDone = '完成';
+  static const skipItem = '跳过';
+  static const previousDay = '前一天';
+  static const nextDay = '后一天';
+  static const adjustTime = '调整时间';
+  static const statusOffline = '离线';
+  static const statusSyncing = '同步中';
+  static const reviewSubmitted = '已提交晚间复盘';
+  static const reviewConfirm = '按当前完成情况提交？';
+  static const submit = '提交';
+  static const cancel = '取消';
 }
