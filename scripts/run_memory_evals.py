@@ -184,7 +184,11 @@ async def _preflight(gateway: LLMGateway) -> str:
             trace_id="memory-eval-preflight",
         )
     except httpx.HTTPStatusError as exc:
-        body = exc.response.text[:500]
+        try:
+            await exc.response.aread()
+            body = exc.response.text[:500]
+        except Exception:
+            body = str(exc.request.url)
         raise SystemExit(
             f"预检失败 HTTP {exc.response.status_code}：{body}"
         ) from exc
