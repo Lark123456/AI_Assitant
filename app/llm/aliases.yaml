@@ -1,29 +1,28 @@
 # 档位别名 -> provider / model / params / fallback
 # 业务代码只允许引用别名，禁止出现模型名字符串。
 # 两套凭据 profile（注册点见 main.py / feishu_main.py）：
-#  - openai_compat：OpenAI 兼容端点（.env 的 LLM_BASE_URL / LLM_API_KEY）；当前指向 DeepSeek 官方，
-#    friday_fast / memory_extract / memory_resolve / brief_compose 使用 deepseek-flash
+#  - openai_compat：OpenAI 兼容端点（.env 的 LLM_BASE_URL / LLM_API_KEY）；当前为方舟 Agent Plan
+#    （/api/plan/v3），friday_fast / memory_extract / memory_resolve / brief_compose 使用 ark-code-latest
 #  - openai_compat_agent：方舟 Agent Plan 端点（.env 的 LLM_AGENT_*），Jarvis 深档专用
 # ark-code-latest：实际模型在方舟控制台「开通管理」选择/切换（3-5 分钟生效，支持 Auto 模式）；
-# 注意同一别名在两个套餐端点下各自独立解析（Coding → 控制台所选的编码模型，Agent → 所选的推理模型）。
-# deepseek-flash：DeepSeek 官方按量计费模型（V4.1 Flash），端点由 .env 的 LLM_BASE_URL 决定。
+# 注意同一别名在两个套餐端点下各自独立解析（Coding/Agent → 控制台所选的模型）。
 friday_fast:
   provider: openai_compat
-  model: deepseek-flash
+  model: ark-code-latest
   params:
     max_tokens: 2048
     temperature: 0.3
     timeout: 30
 memory_extract:
   provider: openai_compat
-  model: deepseek-flash
+  model: ark-code-latest
   params:
     max_tokens: 2048
     temperature: 0.0
     timeout: 30
 memory_resolve:
   provider: openai_compat
-  model: deepseek-flash
+  model: ark-code-latest
   params:
     max_tokens: 512
     temperature: 0.0
@@ -51,7 +50,7 @@ vision_extract:
     timeout: 60
 brief_compose:
   provider: openai_compat
-  model: deepseek-flash
+  model: ark-code-latest
   params:
     # 只生成一句开场语；超时 3 秒即回退模板
     max_tokens: 120
