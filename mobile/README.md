@@ -112,10 +112,28 @@ $env:SCREENSHOTS="1"
 
 当前环境未连接 Android 设备或模拟器，因此这些是组件渲染截图，不是真机截图；真机验收仍标记为「待验收」。
 
+## 远程 Today 只读模式（U2 第一批）
+
+默认仍是 Mock；用 `--dart-define` 开启真实 Today 只读数据：
+
+```powershell
+adb reverse tcp:8000 tcp:8000
+& $DART $FLUTTER --no-version-check build apk --debug `
+  --dart-define=USE_REMOTE=true `
+  --dart-define=BUTLER_API_BASE_URL=http://127.0.0.1:8000 `
+  --dart-define=BUTLER_USER=<用户 UUID 或飞书 open_id>
+```
+
+后端接口：`GET /api/mobile/today?date=YYYY-MM-DD`，开发期用户头 `X-Butler-User`。
+当前只读：展示真实时间线、提醒与未排期任务；完成/跳过/改期/复盘提交在远程模式下禁用。
+晨间/晚间简报暂返回空，聊天仍为 Mock。`adb reverse` 需要手机开启 USB 调试；也可以把后端改为局域网地址。
+
 ## 验收状态
 
-- `analyze` / `format` / `test` / `build apk --debug`：通过（100 项测试；3 项截图生成测试默认跳过）
+- `analyze` / `format` / `test` / `build apk --debug`：通过（105 项测试；3 项截图生成测试默认跳过）
 - APK SDK：`sdkVersion 26`、`targetSdkVersion 36`
+- 应用名：`Butler`（Android label；包名仍为 `com.butler.mobile`）
+- 最新 Debug APK：`build/app/outputs/flutter-apk/app-debug.apk`
 - 真机验收：待执行（当前无可用设备）
 
 ## U1 补缺与规格出入

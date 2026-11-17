@@ -110,6 +110,7 @@ class _TodayBody extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final day = state.day;
+    final readOnly = ref.watch(todayRepositoryProvider).readOnly;
     final now = ref.watch(clockProvider).now();
     final doneCount = day.items
         .where((item) => item.status == TodayItemStatus.done)
@@ -130,6 +131,10 @@ class _TodayBody extends ConsumerWidget {
             const SizedBox(height: AppSpacing.md),
           ] else if (networkStatus == NetworkStatus.syncing) ...[
             const _NetworkBanner(text: S.syncing, icon: Icons.sync),
+            const SizedBox(height: AppSpacing.md),
+          ],
+          if (readOnly) ...[
+            const _ReadOnlyBanner(),
             const SizedBox(height: AppSpacing.md),
           ],
           _TodayHeader(
@@ -167,7 +172,7 @@ class _TodayBody extends ConsumerWidget {
           ],
           const SizedBox(height: AppSpacing.xl),
           OutlinedButton.icon(
-            onPressed: () => _confirmReview(context, ref),
+            onPressed: readOnly ? null : () => _confirmReview(context, ref),
             icon: const Icon(Icons.nightlight_outlined),
             label: const Text(S.eveningReview),
           ),
@@ -346,6 +351,7 @@ class _TodayItemTile extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final theme = Theme.of(context);
+    final readOnly = ref.watch(todayRepositoryProvider).readOnly;
     final done = item.status == TodayItemStatus.done;
     final skipped = item.status == TodayItemStatus.skipped;
     final terminal = done || skipped;
@@ -364,7 +370,7 @@ class _TodayItemTile extends ConsumerWidget {
         Expanded(
           child: Dismissible(
             key: ValueKey(item.id),
-            direction: terminal
+            direction: terminal || readOnly
                 ? DismissDirection.none
                 : DismissDirection.horizontal,
             background: _SwipeBackground(
@@ -427,7 +433,7 @@ class _TodayItemTile extends ConsumerWidget {
             width: AppSizes.minTouch,
             height: AppSizes.minTouch,
           ),
-          onPressed: terminal
+          onPressed: terminal || readOnly
               ? null
               : () => ref
                     .read(todayControllerProvider.notifier)
@@ -483,6 +489,7 @@ class _TodayItemTile extends ConsumerWidget {
   }
 
   Future<void> _showActions(BuildContext context, WidgetRef ref) async {
+    final readOnly = ref.read(todayRepositoryProvider).readOnly;
     final terminal =
         item.status == TodayItemStatus.done ||
         item.status == TodayItemStatus.skipped;
@@ -506,14 +513,14 @@ class _TodayItemTile extends ConsumerWidget {
                 ),
               ),
               ListTile(
-                enabled: !terminal,
+                enabled: !terminal && !readOnly,
                 leading: const Icon(Icons.schedule),
                 title: const Text(S.adjustTime),
                 onTap: () =>
                     Navigator.pop(sheetContext, _ItemAction.adjustTime),
               ),
               ListTile(
-                enabled: !terminal,
+                enabled: !terminal && !readOnly,
                 leading: const Icon(Icons.skip_next),
                 title: const Text(S.skipItem),
                 onTap: () => Navigator.pop(sheetContext, _ItemAction.skip),
@@ -735,6 +742,7 @@ class _UnscheduledTile extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final theme = Theme.of(context);
+    final readOnly = ref.watch(todayRepositoryProvider).readOnly;
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(AppSpacing.md),
@@ -753,12 +761,14 @@ class _UnscheduledTile extends ConsumerWidget {
               ),
             ),
             TextButton(
-              onPressed: () => ref
-                  .read(todayControllerProvider.notifier)
-                  .moveToToday(
-                    item.id,
-                    DateTime(day.year, day.month, day.day, 18),
-                  ),
+              onPressed: readOnly
+                  ? null
+                  : () => ref
+                        .read(todayControllerProvider.notifier)
+                        .moveToToday(
+                          item.id,
+                          DateTime(day.year, day.month, day.day, 18),
+                        ),
               child: const Text(S.planForToday),
             ),
           ],
@@ -795,6 +805,43 @@ class _NetworkBanner extends StatelessWidget {
               text,
               style: theme.textTheme.bodySmall?.copyWith(
                 color: theme.colorScheme.onErrorContainer,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ReadOnlyBanner extends StatelessWidget {
+  const _ReadOnlyBanner();
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Container(
+      padding: const EdgeInsets.symmetric(
+        horizontal: AppSpacing.md,
+        vertical: AppSpacing.sm,
+      ),
+      decoration: BoxDecoration(
+        color: theme.colorScheme.secondaryContainer,
+        borderRadius: BorderRadius.circular(AppRadius.button),
+      ),
+      child: Row(
+        children: [
+          Icon(
+            Icons.visibility_outlined,
+            size: 18,
+            color: theme.colorScheme.onSecondaryContainer,
+          ),
+          const SizedBox(width: AppSpacing.sm),
+          Expanded(
+            child: Text(
+              S.readOnlyMode,
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: theme.colorScheme.onSecondaryContainer,
               ),
             ),
           ),

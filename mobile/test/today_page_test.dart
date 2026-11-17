@@ -8,11 +8,45 @@ import 'package:mobile/core/strings.dart';
 import 'package:mobile/core/theme/app_theme.dart';
 import 'package:mobile/data/mock/mock_network_status_source.dart';
 import 'package:mobile/data/mock/mock_today_repository.dart';
+import 'package:mobile/data/remote/api_client.dart';
+import 'package:mobile/data/remote/remote_today_repository.dart';
 import 'package:mobile/domain/enums.dart';
 import 'package:mobile/domain/models/today.dart';
+import 'package:mobile/domain/repositories/today_repository.dart';
 import 'package:mobile/features/today/today_page.dart';
 
 final _now = DateTime(2026, 11, 16, 9);
+
+class _FakeApiClient implements ApiClient {
+  _FakeApiClient(this.payload);
+
+  final Map<String, dynamic> payload;
+
+  @override
+  Future<Map<String, dynamic>> getJson(String path) async => payload;
+}
+
+Map<String, dynamic> _readOnlyPayload() => {
+  'date': '2026-11-16',
+  'items': [
+    {
+      'id': 'block-1',
+      'kind': 'block',
+      'title': '专注写作',
+      'status': 'planned',
+      'compressible': true,
+      'syncState': 'synced',
+      'start': '2026-11-16T09:00:00+08:00',
+      'end': '2026-11-16T10:00:00+08:00',
+      'durationMin': 60,
+      'sourceTag': '日程',
+      'reason': null,
+    },
+  ],
+  'unscheduled': [],
+  'morningBrief': null,
+  'eveningBrief': null,
+};
 
 Future<void> _pumpAction(WidgetTester tester) async {
   for (var round = 0; round < 2; round++) {
@@ -32,17 +66,19 @@ Widget _app({
   NetworkStatus network = NetworkStatus.online,
   double textScale = 1.0,
   MockNetworkStatusSource? source,
+  TodayRepository? repository,
 }) {
   final clock = _FakeClock();
   return ProviderScope(
     overrides: [
       clockProvider.overrideWithValue(clock),
       todayRepositoryProvider.overrideWithValue(
-        MockTodayRepository(
-          clock: clock,
-          delay: Duration.zero,
-          dataset: dataset,
-        ),
+        repository ??
+            MockTodayRepository(
+              clock: clock,
+              delay: Duration.zero,
+              dataset: dataset,
+            ),
       ),
       mockNetworkStatusSourceProvider.overrideWithValue(
         source ?? MockNetworkStatusSource(initial: network),
@@ -279,6 +315,25 @@ void main() {
     await gesture.up();
     await tester.pumpAndSettle();
     expect(find.text(S.voiceListening), findsNothing);
+  });
+
+  testWidgets('远程只读模式显示提示并禁用写操作', (tester) async {
+    final repository = RemoteTodayRepository(
+      client: _FakeApiClient(_readOnlyPayload()),
+    );
+    await tester.pumpWidget(_app(repository: repository));
+    await tester.pumpAndSettle();
+
+    expect(find.text(S.readOnlyMode), findsOneWidget);
+    final button = tester.widget<IconButton>(
+      find.widgetWithIcon(IconButton, Icons.check_circle_outline).first,
+    );
+    expect(button.onPressed, isNull);
+
+    final dismissible = tester.widget<Dismissible>(
+      find.byKey(const ValueKey('block-1')),
+    );
+    expect(dismissible.direction, DismissDirection.none);
   });
 
   testWidgets('1.5 倍文字缩放下操作面板与录音面板不溢出', (tester) async {

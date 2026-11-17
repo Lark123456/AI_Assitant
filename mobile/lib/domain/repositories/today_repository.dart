@@ -3,6 +3,9 @@ import '../models/today.dart';
 
 /// 今日页数据来源。
 abstract interface class TodayRepository {
+  /// 只读仓库：页面隐藏或禁用写操作。
+  bool get readOnly;
+
   Future<DayView> loadDay(DateTime date);
 
   Future<TodayItem> complete(String itemId);

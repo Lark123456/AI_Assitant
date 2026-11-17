@@ -3,11 +3,14 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../data/mock/mock_chat_repository.dart';
 import '../data/mock/mock_network_status_source.dart';
 import '../data/mock/mock_today_repository.dart';
+import '../data/remote/api_client.dart';
+import '../data/remote/remote_today_repository.dart';
 import '../domain/enums.dart';
 import '../domain/repositories/chat_repository.dart';
 import '../domain/repositories/today_repository.dart';
 import 'clock.dart';
 import 'debug.dart';
+import 'remote_config.dart';
 
 /// Provider 装配层：features 只依赖这里暴露的接口，不直接 import data/mock。
 
@@ -34,7 +37,20 @@ final chatRepositoryProvider = Provider<ChatRepository>((ref) {
   return repository;
 });
 
+final remoteConfigProvider = Provider<RemoteConfig>((ref) {
+  return RemoteConfig.fromEnvironment;
+});
+
+final apiClientProvider = Provider<ApiClient>((ref) {
+  final config = ref.watch(remoteConfigProvider);
+  return HttpApiClient(baseUrl: config.baseUrl, user: config.user);
+});
+
 final todayRepositoryProvider = Provider<TodayRepository>((ref) {
+  final remote = ref.watch(remoteConfigProvider);
+  if (remote.enabled) {
+    return RemoteTodayRepository(client: ref.watch(apiClientProvider));
+  }
   final debug = ref.watch(debugControllerProvider);
   return MockTodayRepository(
     clock: ref.watch(clockProvider),

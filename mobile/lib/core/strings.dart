@@ -36,6 +36,7 @@ abstract final class S {
   static const skipped = '已跳过';
   static const overdue = '已逾期';
   static const waitingSync = '待同步';
+  static const readOnlyMode = '只读模式：真实数据已接入，修改操作将在下一批开放';
 
   static const placeholderBody = '这一页将在后续批次实现';
   static const tasksNextStage = '任务页将在下一阶段提供';
@@ -113,6 +114,9 @@ abstract final class S {
   static const planVeto = '否决';
 
   static const debugPanel = '调试面板';
+  static const debugRemote = '数据源';
+  static const debugRemoteMock = '本地 Mock';
+  static const debugRemoteNoUser = '未配置用户';
   static const debugTime = '模拟时间';
   static const debugTimeSystem = '跟随系统';
   static const debugPlusHour = '+1 小时';

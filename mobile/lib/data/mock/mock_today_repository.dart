@@ -26,6 +26,9 @@ class MockTodayRepository implements TodayRepository {
            ? seedEveningBrief()
            : null;
 
+  @override
+  bool get readOnly => false;
+
   final Duration delay;
   final MockTodayDataset dataset;
   final List<TodayItem> _items;

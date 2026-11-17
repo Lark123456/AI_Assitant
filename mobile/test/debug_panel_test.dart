@@ -101,6 +101,7 @@ void main() {
     );
     await tester.pumpAndSettle();
 
+    await tester.scrollUntilVisible(find.byType(Switch), 200);
     await tester.tap(find.byType(Switch));
     await tester.pumpAndSettle();
     expect(container.read(debugControllerProvider).failNextSend, isTrue);

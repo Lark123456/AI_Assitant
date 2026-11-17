@@ -16,6 +16,7 @@ class DebugPanelPage extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final theme = Theme.of(context);
     final debug = ref.watch(debugControllerProvider);
+    final remote = ref.watch(remoteConfigProvider);
     final simulated = ref.watch(simulatedTimeProvider);
     final network =
         ref.watch(networkStatusProvider).value ?? NetworkStatus.online;
@@ -25,6 +26,16 @@ class DebugPanelPage extends ConsumerWidget {
       body: ListView(
         padding: const EdgeInsets.all(AppSpacing.lg),
         children: [
+          _Section(
+            title: S.debugRemote,
+            child: Text(
+              remote.enabled
+                  ? '${remote.baseUrl} · '
+                        '${remote.user.isEmpty ? S.debugRemoteNoUser : remote.user}'
+                  : S.debugRemoteMock,
+              style: theme.textTheme.bodySmall,
+            ),
+          ),
           _Section(
             title: S.debugTime,
             child: Column(
