@@ -70,6 +70,13 @@ List<ChatMessage> seedMessages(DateTime now) {
       createdAt: base.add(const Duration(minutes: 7)),
       phase: ThinkingPhase.drafting,
     ),
+    TextMessage(
+      id: 'seed-nudge-1',
+      sender: ChatSender.friday,
+      createdAt: base.add(const Duration(minutes: 8)),
+      text: '下午有一个空档，要不要先把评审排进去？',
+      reason: '你昨天提到今天要交评审意见',
+    ),
   ];
 }
 

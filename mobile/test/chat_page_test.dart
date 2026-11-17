@@ -46,6 +46,7 @@ Widget _app({
   NetworkStatus network = NetworkStatus.online,
   bool failing = false,
   double textScale = 1.0,
+  MockChatRepository? repository,
 }) {
   final clock = _FakeClock();
   return ProviderScope(
@@ -56,17 +57,19 @@ Widget _app({
       ),
       chatRepositoryProvider.overrideWith((ref) {
         if (failing) return _FailingRepository();
-        final repository = MockChatRepository(
-          clock: clock,
-          network: MockNetworkStatusSource(initial: network),
-          seed: seed,
-          sendDelay: Duration.zero,
-          replyDelay: Duration.zero,
-          streamInterval: Duration.zero,
-          streamChunk: 4,
-        );
-        ref.onDispose(repository.dispose);
-        return repository;
+        final repo =
+            repository ??
+            MockChatRepository(
+              clock: clock,
+              network: MockNetworkStatusSource(initial: network),
+              seed: seed,
+              sendDelay: Duration.zero,
+              replyDelay: Duration.zero,
+              streamInterval: Duration.zero,
+              streamChunk: 4,
+            );
+        ref.onDispose(repo.dispose);
+        return repo;
       }),
     ],
     child: MaterialApp(
@@ -184,6 +187,143 @@ void main() {
     );
     await tester.pumpAndSettle();
 
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('副标题显示常驻秒回', (tester) async {
+    await tester.pumpWidget(_app());
+    await tester.pumpAndSettle();
+
+    expect(find.text(S.chatSubtitle), findsOneWidget);
+  });
+
+  testWidgets('主动消息显示理由并可打开为什么推给我', (tester) async {
+    final nudge = TextMessage(
+      id: 'nudge-1',
+      sender: ChatSender.friday,
+      createdAt: _now,
+      text: '下午有一个空档',
+      reason: '你昨天提到今天要交报告',
+    );
+    await tester.pumpWidget(_app(seed: [nudge]));
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining(nudge.reason!), findsOneWidget);
+
+    await tester.tap(find.textContaining(S.whyPushed));
+    await tester.pumpAndSettle();
+
+    expect(find.text(S.whyPushed), findsOneWidget);
+    expect(find.text(S.quieter), findsOneWidget);
+    expect(find.text(S.disableCategory), findsOneWidget);
+
+    await tester.tap(find.text(S.quieter));
+    await tester.pumpAndSettle();
+    expect(find.text(S.quieterNoted), findsOneWidget);
+  });
+
+  testWidgets('快捷词点击直接发送', (tester) async {
+    final clock = _FakeClock();
+    final repository = MockChatRepository(
+      clock: clock,
+      network: MockNetworkStatusSource(),
+      seed: const [],
+      sendDelay: Duration.zero,
+      replyDelay: Duration.zero,
+      streamInterval: Duration.zero,
+      streamChunk: 100,
+    );
+    await tester.pumpWidget(_app(repository: repository));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text(S.quickAddReminder));
+    await tester.pumpAndSettle();
+
+    final messages = await repository.watchMessages().first;
+    expect(
+      messages.whereType<TextMessage>().any(
+        (message) =>
+            message.sender == ChatSender.user &&
+            message.text == S.quickAddReminder,
+      ),
+      isTrue,
+    );
+  });
+
+  testWidgets('加号打开拍照与相册面板', (tester) async {
+    await tester.pumpWidget(_app());
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byTooltip(S.more));
+    await tester.pumpAndSettle();
+    expect(find.text(S.takePhoto), findsOneWidget);
+    expect(find.text(S.chooseFromAlbum), findsOneWidget);
+
+    await tester.tap(find.text(S.takePhoto));
+    await tester.pumpAndSettle();
+    expect(find.text(S.takePhoto), findsNothing);
+    expect(find.text(S.uiOnly), findsOneWidget);
+  });
+
+  testWidgets('上翻后新消息显示跳转按钮', (tester) async {
+    final clock = _FakeClock();
+    final repository = MockChatRepository(
+      clock: clock,
+      network: MockNetworkStatusSource(),
+      seed: [
+        for (var index = 0; index < 30; index++)
+          TextMessage(
+            id: 'history-$index',
+            sender: ChatSender.friday,
+            createdAt: _now.add(Duration(minutes: index)),
+            text: '历史消息 $index',
+          ),
+      ],
+      sendDelay: Duration.zero,
+      replyDelay: Duration.zero,
+      streamInterval: Duration.zero,
+      streamChunk: 100,
+    );
+    await tester.pumpWidget(_app(repository: repository));
+    await tester.pumpAndSettle();
+
+    await tester.drag(find.byType(ListView), const Offset(0, 600));
+    await tester.pumpAndSettle();
+    expect(find.text(S.newMessages), findsNothing);
+
+    final sending = repository.sendText('新消息内容');
+    for (var step = 0; step < 10; step++) {
+      await tester.pump(const Duration(milliseconds: 20));
+    }
+    await sending;
+    await tester.pumpAndSettle();
+    expect(find.text(S.newMessages), findsOneWidget);
+
+    await tester.tap(find.text(S.newMessages));
+    await tester.pumpAndSettle();
+    expect(find.text(S.newMessages), findsNothing);
+  });
+
+  testWidgets('1.5 倍文字缩放打开理由与加号面板不溢出', (tester) async {
+    final nudge = TextMessage(
+      id: 'nudge-2',
+      sender: ChatSender.friday,
+      createdAt: _now,
+      text: '下午有一个空档',
+      reason: '你昨天提到今天要交报告',
+    );
+    await tester.pumpWidget(_app(seed: [nudge], textScale: 1.5));
+    await tester.pumpAndSettle();
+    expect(tester.takeException(), isNull);
+
+    await tester.tap(find.textContaining(S.whyPushed));
+    await tester.pumpAndSettle();
+    expect(tester.takeException(), isNull);
+    Navigator.of(tester.element(find.text(S.whyPushed))).pop();
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byTooltip(S.more));
+    await tester.pumpAndSettle();
     expect(tester.takeException(), isNull);
   });
 }

@@ -97,10 +97,39 @@ debug 构建下长按 Today 页标题进入。支持模拟时间、网络状态�
 
 ## 截图
 
-存放于 `mobile/screenshots/`，使用虚构数据。当前开发环境未连接 Android 设备或模拟器，截图与真机验收标记为「待验收」，完成后补充。
+存放在 `mobile/screenshots/`，使用虚构数据，共 6 张：
+
+- `today_light.png` / `today_dark.png`
+- `chat_light.png` / `chat_dark.png`
+- `debug_light.png` / `debug_dark.png`
+
+由 `test/screenshot_test.dart` 渲染生成（默认跳过，需显式开启）：
+
+```powershell
+$env:SCREENSHOTS="1"
+& $DART $FLUTTER --no-version-check test --update-goldens test/screenshot_test.dart
+```
+
+当前环境未连接 Android 设备或模拟器，因此这些是组件渲染截图，不是真机截图；真机验收仍标记为「待验收」。
 
 ## 验收状态
 
-- `analyze` / `format` / `test` / `build apk --debug`：通过（82 项测试）
+- `analyze` / `format` / `test` / `build apk --debug`：通过（100 项测试；3 项截图生成测试默认跳过）
 - APK SDK：`sdkVersion 26`、`targetSdkVersion 36`
-- 真机验收与截图：待执行（当前无可用设备）
+- 真机验收：待执行（当前无可用设备）
+
+## U1 补缺与规格出入
+
+本次补齐：左滑完成/右滑跳过与撤销、长按操作面板（改期/跳过/详情/为什么这样排）、简报调整面板、下拉刷新同步态、今日页按住语音面板、主动消息理由行与「为什么推给我」、输入条快捷词、拍照/相册面板、新消息跳转按钮、副标题「常驻 · 秒回」。
+
+与归档规格的出入：
+
+- 今日页只补了语音按钮（FAB + 录音面板），没有补归档 8.1.7 的「文本 + 语音」完整输入条；今日页文本发送与跳转主对话仍不在本次范围。
+- 对话页未新增语音入口；归档 9.5 的语音输入仍待后续。
+- 语音、拍照、相册、简报调整、少打扰、关闭这一类均为仅界面，不申请权限、不录音、不上传。
+- 快捷词按确认结果「点击直接发送」，不会先填入输入框。
+- 下拉刷新只模拟同步状态并重新加载 Mock 当天数据，不发真实网络请求。
+- 撤销通过 `TodayRepository.restore` 在 Mock 内恢复状态，不涉及真实同步。
+- 时间选择器使用 Material 默认本地化；未新增 `flutter_localizations`，英文/测试环境下按钮显示英文。
+- 新消息按钮按 120dp 阈值判断，不提供未读计数。
+- 截图是组件渲染图，不是真机截图；截图测试使用系统黑体与 MaterialIcons 字体，仅影响测试，不改变应用依赖。

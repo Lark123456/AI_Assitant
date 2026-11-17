@@ -45,6 +45,24 @@ void main() {
     expect(skipped.status, TodayItemStatus.skipped);
   });
 
+  test('restore 恢复完成/跳过前的状态', () async {
+    final repository = _repository();
+
+    await repository.complete('today-reminder-1');
+    final restored = await repository.restore(
+      'today-reminder-1',
+      TodayItemStatus.planned,
+    );
+    expect(restored.status, TodayItemStatus.planned);
+
+    await repository.skip('today-block-2');
+    final restoredBlock = await repository.restore(
+      'today-block-2',
+      TodayItemStatus.inProgress,
+    );
+    expect(restoredBlock.status, TodayItemStatus.inProgress);
+  });
+
   test('reschedule 更新 start 并保持排序', () async {
     final repository = _repository();
 

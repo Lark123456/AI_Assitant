@@ -68,34 +68,90 @@ class _MessageList extends StatefulWidget {
 }
 
 class _MessageListState extends State<_MessageList> {
+  static const _nearBottomThreshold = 120.0;
+
   final _controller = ScrollController();
+  var _atBottom = true;
+  var _showNewMessages = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller.addListener(_onScroll);
+    WidgetsBinding.instance.addPostFrameCallback((_) => _jumpToBottom());
+  }
+
+  void _onScroll() {
+    if (!_controller.hasClients) return;
+    final distance = _controller.position.maxScrollExtent - _controller.offset;
+    final atBottom = distance <= _nearBottomThreshold;
+    _atBottom = atBottom;
+    if (atBottom && _showNewMessages) {
+      setState(() => _showNewMessages = false);
+    }
+  }
+
+  void _jumpToBottom() {
+    if (!_controller.hasClients) return;
+    _controller.jumpTo(_controller.position.maxScrollExtent);
+    _atBottom = true;
+  }
 
   @override
   void didUpdateWidget(covariant _MessageList oldWidget) {
     super.didUpdateWidget(oldWidget);
+    final grew = widget.messages.length > oldWidget.messages.length;
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (_controller.hasClients) {
-        _controller.jumpTo(_controller.position.maxScrollExtent);
+      if (!mounted) return;
+      if (_atBottom) {
+        _jumpToBottom();
+      } else if (grew) {
+        setState(() => _showNewMessages = true);
       }
     });
   }
 
   @override
   void dispose() {
+    _controller.removeListener(_onScroll);
     _controller.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    return ListView.builder(
-      controller: _controller,
-      padding: const EdgeInsets.all(AppSpacing.lg),
-      itemCount: widget.messages.length,
-      itemBuilder: (context, index) => Padding(
-        padding: const EdgeInsets.only(bottom: AppSpacing.md),
-        child: _MessageView(message: widget.messages[index]),
-      ),
+    return Stack(
+      children: [
+        ListView.builder(
+          controller: _controller,
+          padding: const EdgeInsets.all(AppSpacing.lg),
+          itemCount: widget.messages.length,
+          itemBuilder: (context, index) => Padding(
+            padding: const EdgeInsets.only(bottom: AppSpacing.md),
+            child: _MessageView(message: widget.messages[index]),
+          ),
+        ),
+        if (_showNewMessages)
+          Positioned(
+            left: 0,
+            right: 0,
+            bottom: AppSpacing.md,
+            child: Center(
+              child: FilledButton.tonalIcon(
+                onPressed: () {
+                  _controller.animateTo(
+                    _controller.position.maxScrollExtent,
+                    duration: const Duration(milliseconds: 250),
+                    curve: Curves.easeOut,
+                  );
+                  setState(() => _showNewMessages = false);
+                },
+                icon: const Icon(Icons.arrow_downward, size: 16),
+                label: const Text(S.newMessages),
+              ),
+            ),
+          ),
+      ],
     );
   }
 }
@@ -107,7 +163,7 @@ class _MessageView extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    return switch (message) {
+    final bubble = switch (message) {
       final TextMessage text => _TextBubble(message: text),
       final ConfirmCard card => _ConfirmCardView(card: card),
       final ChoiceCard card => _ChoiceCardView(card: card),
@@ -116,6 +172,144 @@ class _MessageView extends ConsumerWidget {
       final JarvisIntroCard card => _JarvisIntroView(card: card),
       final ThinkingCard card => _ThinkingView(card: card),
     };
+    if (message.sender == ChatSender.user || message.reason == null) {
+      return bubble;
+    }
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        bubble,
+        const SizedBox(height: AppSpacing.xs),
+        _ReasonLine(
+          reason: message.reason!,
+          onTap: () => _showWhySheet(context, message.reason!),
+        ),
+      ],
+    );
+  }
+
+  void _showWhySheet(BuildContext context, String reason) {
+    showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      isScrollControlled: true,
+      builder: (sheetContext) => _WhySheet(reason: reason),
+    );
+  }
+}
+
+class _ReasonLine extends StatelessWidget {
+  const _ReasonLine({required this.reason, required this.onTap});
+
+  final String reason;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return ConstrainedBox(
+      constraints: BoxConstraints(
+        maxWidth: MediaQuery.of(context).size.width * 0.86,
+      ),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(AppRadius.button),
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(
+            horizontal: AppSpacing.xs,
+            vertical: 2,
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                Icons.info_outline,
+                size: 14,
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
+              const SizedBox(width: AppSpacing.xs),
+              Flexible(
+                child: Text.rich(
+                  TextSpan(
+                    text: reason,
+                    children: [
+                      TextSpan(
+                        text: '  ${S.whyPushed}',
+                        style: TextStyle(
+                          color: theme.colorScheme.primary,
+                          decoration: TextDecoration.underline,
+                        ),
+                      ),
+                    ],
+                  ),
+                  style: theme.textTheme.labelSmall,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _WhySheet extends StatelessWidget {
+  const _WhySheet({required this.reason});
+
+  final String reason;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final messenger = ScaffoldMessenger.of(context);
+    return SafeArea(
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.fromLTRB(
+          AppSpacing.lg,
+          0,
+          AppSpacing.lg,
+          AppSpacing.lg,
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(S.whyPushed, style: theme.textTheme.bodyMedium),
+            const SizedBox(height: AppSpacing.sm),
+            Text(reason, style: theme.textTheme.bodySmall),
+            const SizedBox(height: AppSpacing.md),
+            ListTile(
+              contentPadding: EdgeInsets.zero,
+              leading: const Icon(Icons.notifications_off_outlined),
+              title: const Text(S.quieter),
+              onTap: () {
+                Navigator.pop(context);
+                messenger.showSnackBar(
+                  const SnackBar(content: Text(S.quieterNoted)),
+                );
+              },
+            ),
+            ListTile(
+              contentPadding: EdgeInsets.zero,
+              leading: const Icon(Icons.block),
+              title: const Text(S.disableCategory),
+              onTap: () {
+                Navigator.pop(context);
+                messenger.showSnackBar(
+                  const SnackBar(content: Text(S.categoryDisabled)),
+                );
+              },
+            ),
+            Align(
+              alignment: Alignment.centerRight,
+              child: TextButton(
+                onPressed: () => Navigator.pop(context),
+                child: const Text(S.gotIt),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 }
 
@@ -468,10 +662,16 @@ class _ThinkingView extends ConsumerWidget {
     return _CardShell(
       child: Row(
         children: [
-          const SizedBox(
-            width: 16,
-            height: 16,
-            child: CircularProgressIndicator(strokeWidth: 2),
+          TweenAnimationBuilder<double>(
+            tween: Tween(begin: 0.4, end: 1),
+            duration: const Duration(milliseconds: 600),
+            builder: (context, value, child) =>
+                Opacity(opacity: value, child: child),
+            child: Icon(
+              Icons.auto_awesome,
+              size: 16,
+              color: theme.colorScheme.primary,
+            ),
           ),
           const SizedBox(width: AppSpacing.sm),
           Text(_phaseText(card.phase), style: theme.textTheme.bodySmall),
@@ -521,11 +721,13 @@ class _Composer extends ConsumerStatefulWidget {
 
 class _ComposerState extends ConsumerState<_Composer> {
   final _controller = TextEditingController();
+  final _focusNode = FocusNode();
   var _sending = false;
 
   @override
   void dispose() {
     _controller.dispose();
+    _focusNode.dispose();
     super.dispose();
   }
 
@@ -533,6 +735,15 @@ class _ComposerState extends ConsumerState<_Composer> {
     final text = _controller.text.trim();
     if (text.isEmpty || _sending) return;
     _controller.clear();
+    await _sendText(text);
+  }
+
+  Future<void> _sendQuick(String text) async {
+    if (_sending) return;
+    await _sendText(text);
+  }
+
+  Future<void> _sendText(String text) async {
     setState(() => _sending = true);
     await ref.read(chatControllerProvider.notifier).sendText(text);
     if (mounted) setState(() => _sending = false);
@@ -547,30 +758,103 @@ class _ComposerState extends ConsumerState<_Composer> {
         AppSpacing.lg,
         AppSpacing.sm,
       ),
-      child: Row(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Expanded(
-            child: TextField(
-              controller: _controller,
-              textInputAction: TextInputAction.send,
-              onSubmitted: (_) => _send(),
-              decoration: InputDecoration(
-                hintText: S.inputHint,
-                isDense: true,
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(AppRadius.button),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: Wrap(
+              spacing: AppSpacing.sm,
+              runSpacing: AppSpacing.xs,
+              children: [
+                ActionChip(
+                  label: const Text(S.quickAddReminder),
+                  onPressed: () => _sendQuick(S.quickAddReminder),
                 ),
-              ),
+                ActionChip(
+                  label: const Text(S.quickPlanToday),
+                  onPressed: () => _sendQuick(S.quickPlanToday),
+                ),
+                ActionChip(
+                  label: const Text(S.quickWhatRemember),
+                  onPressed: () => _sendQuick(S.quickWhatRemember),
+                ),
+              ],
             ),
           ),
-          const SizedBox(width: AppSpacing.sm),
-          FilledButton(
-            onPressed: _sending ? null : _send,
-            child: const Text(S.send),
+          const SizedBox(height: AppSpacing.sm),
+          Row(
+            children: [
+              IconButton(
+                tooltip: S.more,
+                onPressed: () => _showAttachmentSheet(context),
+                icon: const Icon(Icons.add),
+              ),
+              Expanded(
+                child: TextField(
+                  controller: _controller,
+                  focusNode: _focusNode,
+                  textInputAction: TextInputAction.send,
+                  onSubmitted: (_) => _send(),
+                  decoration: InputDecoration(
+                    hintText: S.inputHint,
+                    isDense: true,
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(AppRadius.button),
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(width: AppSpacing.sm),
+              FilledButton(
+                onPressed: _sending ? null : _send,
+                child: const Text(S.send),
+              ),
+            ],
           ),
         ],
       ),
     );
+  }
+
+  void _showAttachmentSheet(BuildContext context) {
+    showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      isScrollControlled: true,
+      builder: (sheetContext) => SafeArea(
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              ListTile(
+                leading: const Icon(Icons.photo_camera_outlined),
+                title: const Text(S.takePhoto),
+                onTap: () {
+                  Navigator.pop(sheetContext);
+                  _showUiOnly(context);
+                },
+              ),
+              ListTile(
+                leading: const Icon(Icons.photo_library_outlined),
+                title: const Text(S.chooseFromAlbum),
+                onTap: () {
+                  Navigator.pop(sheetContext);
+                  _showUiOnly(context);
+                },
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  void _showUiOnly(BuildContext context) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context)
+        .showSnackBar(const SnackBar(content: Text(S.uiOnly)));
   }
 }
 

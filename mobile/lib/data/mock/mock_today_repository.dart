@@ -61,6 +61,18 @@ class MockTodayRepository implements TodayRepository {
   }
 
   @override
+  Future<TodayItem> restore(String itemId, TodayItemStatus status) async {
+    await Future<void>.delayed(delay);
+    final index = _items.indexWhere((item) => item.id == itemId);
+    if (index < 0) {
+      throw ArgumentError.value(itemId, 'itemId', 'today item not found');
+    }
+    final updated = _items[index].copyWith(status: status);
+    _items[index] = updated;
+    return updated;
+  }
+
+  @override
   Future<TodayItem> reschedule(String itemId, DateTime newStart) async {
     await Future<void>.delayed(delay);
     final index = _items.indexWhere((item) => item.id == itemId);
