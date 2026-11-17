@@ -52,6 +52,11 @@ class _TodayPageState extends ConsumerState<TodayPage> {
 
   @override
   Widget build(BuildContext context) {
+    ref.listen<String?>(todayActionErrorProvider, (previous, next) {
+      if (next == null) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(next)));
+      ref.read(todayActionErrorProvider.notifier).clear();
+    });
     final async = ref.watch(todayControllerProvider);
     final networkStatus = ref.watch(networkStatusProvider).value;
     return Scaffold(
@@ -513,7 +518,8 @@ class _TodayItemTile extends ConsumerWidget {
                 ),
               ),
               ListTile(
-                enabled: !terminal && !readOnly,
+                enabled:
+                    !terminal && !readOnly && item.kind == TodayItemKind.block,
                 leading: const Icon(Icons.schedule),
                 title: const Text(S.adjustTime),
                 onTap: () =>

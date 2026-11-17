@@ -18,15 +18,27 @@ import 'package:mobile/features/today/today_page.dart';
 final _now = DateTime(2026, 11, 16, 9);
 
 class _FakeApiClient implements ApiClient {
-  _FakeApiClient(this.payload);
+  _FakeApiClient(this.payload, {this.postResponse});
 
   final Map<String, dynamic> payload;
+  final Map<String, dynamic>? postResponse;
+  String? lastPostPath;
 
   @override
   Future<Map<String, dynamic>> getJson(String path) async => payload;
+
+  @override
+  Future<Map<String, dynamic>> postJson(
+    String path,
+    Map<String, dynamic> body, {
+    required String idempotencyKey,
+  }) async {
+    lastPostPath = path;
+    return postResponse ?? payload;
+  }
 }
 
-Map<String, dynamic> _readOnlyPayload() => {
+Map<String, dynamic> _remotePayload() => {
   'date': '2026-11-16',
   'items': [
     {
@@ -251,7 +263,7 @@ void main() {
     await tester.pumpWidget(_app());
     await tester.pumpAndSettle();
 
-    await tester.longPress(find.text('喝水'));
+    await tester.longPress(find.text('方案评审'));
     await tester.pumpAndSettle();
     await tester.tap(find.text(S.adjustTime));
     await tester.pumpAndSettle();
@@ -317,23 +329,83 @@ void main() {
     expect(find.text(S.voiceListening), findsNothing);
   });
 
-  testWidgets('远程只读模式显示提示并禁用写操作', (tester) async {
-    final repository = RemoteTodayRepository(
-      client: _FakeApiClient(_readOnlyPayload()),
+  testWidgets('远程模式允许完成并调用真实接口', (tester) async {
+    final client = _FakeApiClient(
+      _remotePayload(),
+      postResponse: {
+        'id': 'block-1',
+        'kind': 'block',
+        'title': '专注写作',
+        'status': 'done',
+        'compressible': true,
+        'syncState': 'synced',
+        'start': '2026-11-16T09:00:00+08:00',
+        'end': '2026-11-16T10:00:00+08:00',
+        'durationMin': 60,
+        'sourceTag': '日程',
+        'reason': null,
+      },
     );
+    final repository = RemoteTodayRepository(client: client);
     await tester.pumpWidget(_app(repository: repository));
     await tester.pumpAndSettle();
 
-    expect(find.text(S.readOnlyMode), findsOneWidget);
+    expect(find.text(S.readOnlyMode), findsNothing);
     final button = tester.widget<IconButton>(
       find.widgetWithIcon(IconButton, Icons.check_circle_outline).first,
     );
-    expect(button.onPressed, isNull);
+    expect(button.onPressed, isNotNull);
 
-    final dismissible = tester.widget<Dismissible>(
-      find.byKey(const ValueKey('block-1')),
+    await tester.tap(find.byIcon(Icons.check_circle_outline).first);
+    await _pumpAction(tester);
+
+    expect(client.lastPostPath, '/api/mobile/today/items/block-1/complete');
+    expect(find.text(S.done), findsOneWidget);
+  });
+
+  testWidgets('远程模式排进今天后移除未排期条目', (tester) async {
+    final payload = _remotePayload();
+    payload['unscheduled'] = [
+      {
+        'id': 'task-1',
+        'kind': 'task',
+        'title': '整理笔记',
+        'status': 'planned',
+        'compressible': true,
+        'syncState': 'synced',
+        'start': null,
+        'end': null,
+        'durationMin': null,
+        'sourceTag': '任务',
+        'reason': '还没安排时间',
+      },
+    ];
+    final client = _FakeApiClient(
+      payload,
+      postResponse: {
+        'id': 'block-new',
+        'kind': 'block',
+        'title': '整理笔记',
+        'status': 'planned',
+        'compressible': true,
+        'syncState': 'synced',
+        'start': '2026-11-16T18:00:00+08:00',
+        'end': '2026-11-16T19:00:00+08:00',
+        'durationMin': 60,
+        'sourceTag': '日程',
+        'reason': null,
+      },
     );
-    expect(dismissible.direction, DismissDirection.none);
+    final repository = RemoteTodayRepository(client: client);
+    await tester.pumpWidget(_app(repository: repository));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text(S.planForToday));
+    await _pumpAction(tester);
+
+    expect(client.lastPostPath, '/api/mobile/today/tasks/task-1/schedule');
+    expect(find.text(S.unscheduled), findsNothing);
+    expect(find.text('整理笔记'), findsOneWidget);
   });
 
   testWidgets('1.5 倍文字缩放下操作面板与录音面板不溢出', (tester) async {

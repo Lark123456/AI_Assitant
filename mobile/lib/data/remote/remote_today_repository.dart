@@ -1,16 +1,21 @@
+import 'dart:math';
+
 import '../../domain/enums.dart';
 import '../../domain/models/today.dart';
 import '../../domain/repositories/today_repository.dart';
 import 'api_client.dart';
 
-/// U2 第一批：Today 只读仓库；写操作暂时明确失败。
+/// U2：Today 真实数据仓库；写操作调用后端接口，按动作生成幂等键。
 class RemoteTodayRepository implements TodayRepository {
-  RemoteTodayRepository({required this.client});
+  RemoteTodayRepository({required this.client, Random? random})
+    : _random = random ?? Random.secure();
 
   final ApiClient client;
+  final Random _random;
+  var _sequence = 0;
 
   @override
-  bool get readOnly => true;
+  bool get readOnly => false;
 
   @override
   Future<DayView> loadDay(DateTime date) async {
@@ -21,28 +26,62 @@ class RemoteTodayRepository implements TodayRepository {
   }
 
   @override
-  Future<TodayItem> complete(String itemId) =>
-      throw UnsupportedError('Today 只读模式暂不支持完成');
+  Future<TodayItem> complete(String itemId) => _postItem(itemId, 'complete');
 
   @override
-  Future<TodayItem> skip(String itemId) =>
-      throw UnsupportedError('Today 只读模式暂不支持跳过');
+  Future<TodayItem> skip(String itemId) => _postItem(itemId, 'skip');
 
   @override
   Future<TodayItem> restore(String itemId, TodayItemStatus status) =>
-      throw UnsupportedError('Today 只读模式暂不支持撤销');
+      _postItem(itemId, 'restore');
 
   @override
-  Future<TodayItem> reschedule(String itemId, DateTime newStart) =>
-      throw UnsupportedError('Today 只读模式暂不支持改期');
+  Future<TodayItem> reschedule(String itemId, DateTime newStart) async {
+    final raw = await client.postJson(
+      '/api/mobile/today/items/${Uri.encodeComponent(itemId)}/reschedule',
+      {'startsAt': newStart.toUtc().toIso8601String()},
+      idempotencyKey: _nextKey(),
+    );
+    return _parseItem(raw, defaultStatus: null);
+  }
 
   @override
-  Future<TodayItem> moveToToday(String itemId, DateTime start) =>
-      throw UnsupportedError('Today 只读模式暂不支持排期');
+  Future<TodayItem> moveToToday(String itemId, DateTime start) async {
+    final raw = await client.postJson(
+      '/api/mobile/today/tasks/${Uri.encodeComponent(itemId)}/schedule',
+      {'startsAt': start.toUtc().toIso8601String()},
+      idempotencyKey: _nextKey(),
+    );
+    return _parseItem(raw, defaultStatus: null);
+  }
 
   @override
-  Future<void> submitEveningReview(Map<String, bool> completionByItemId) =>
-      throw UnsupportedError('Today 只读模式暂不支持复盘提交');
+  Future<void> submitEveningReview(Map<String, bool> completionByItemId) async {
+    await client.postJson('/api/mobile/today/review', {
+      'results': [
+        for (final entry in completionByItemId.entries)
+          {'itemId': entry.key, 'done': entry.value},
+      ],
+    }, idempotencyKey: _nextKey());
+  }
+
+  Future<TodayItem> _postItem(String itemId, String action) async {
+    final raw = await client.postJson(
+      '/api/mobile/today/items/${Uri.encodeComponent(itemId)}/$action',
+      const {},
+      idempotencyKey: _nextKey(),
+    );
+    return _parseItem(raw, defaultStatus: null);
+  }
+
+  String _nextKey() {
+    _sequence += 1;
+    final random = List<String>.generate(
+      4,
+      (_) => _random.nextInt(0x100000000).toRadixString(16).padLeft(8, '0'),
+    ).join();
+    return 'm$_sequence-$random';
+  }
 }
 
 String _dateParam(DateTime date) {

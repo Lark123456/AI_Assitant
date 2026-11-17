@@ -11,6 +11,13 @@ import 'package:mobile/domain/enums.dart';
 class _FakeApiClient implements ApiClient {
   @override
   Future<Map<String, dynamic>> getJson(String path) async => {};
+
+  @override
+  Future<Map<String, dynamic>> postJson(
+    String path,
+    Map<String, dynamic> body, {
+    required String idempotencyKey,
+  }) async => {};
 }
 
 void main() {
@@ -24,7 +31,7 @@ void main() {
     expect(today.readOnly, isFalse);
   });
 
-  test('远程配置启用时装配只读 Today 仓库', () {
+  test('远程配置启用时装配可写 Today 仓库', () {
     final container = ProviderContainer(
       overrides: [
         remoteConfigProvider.overrideWithValue(
@@ -41,7 +48,7 @@ void main() {
 
     final today = container.read(todayRepositoryProvider);
     expect(today, isA<RemoteTodayRepository>());
-    expect(today.readOnly, isTrue);
+    expect(today.readOnly, isFalse);
   });
 
   test('网络状态源可切换并广播', () async {

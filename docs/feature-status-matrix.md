@@ -1,7 +1,7 @@
 # Butler 功能对照表
 
 > 核对日期：2026-11-17  
-> 代码基线：`master` @ `3f54111`  
+> 代码基线：`master` @ `14ebeb1` + U2 Today 写操作（未提交）  
 > 口径：以已确认的契约与执行计划为准，对照当前代码、测试与运行配置。  
 > 依据：[contracts.md](./contracts.md)、[system-guide.md](./system-guide.md)、[mobile-u1-plan.md](./mobile-u1-plan.md)、[deferred/mobile-sync-and-topics.md](./deferred/mobile-sync-and-topics.md)、代码与测试。  
 > 说明：`system-guide.md` 第二节的能力清单停留在阶段 3a，本表以当前代码为准；两者冲突时以本表与 `contracts.md` 为准。
@@ -11,7 +11,7 @@
 - 后端 P0 阶段 1–3b 的主体机制已经落地：飞书渠道、Friday 工具调用、提醒/简报/主动消息、LLM 网关与审计、记忆写入与检索。
 - 记忆检索注入代码已完成，但 `MEMORY_INJECT_ENABLED` 默认关闭，当前 `.env` 未开启；线上 Friday 还不会主动使用长期记忆。
 - Jarvis 慢通道仍是零代码：只有 `work_item` 层级字段、`assigned_by=jarvis` 枚举和模型别名预留。
-- Mobile U1 已完成；默认仍使用 Mock。U2 第一批已接入 Today 只读接口（`GET /api/mobile/today`），可通过 `--dart-define=USE_REMOTE=true` 开启；聊天、写操作、任务页/我的页、系统通知、同步协议、多会话与 Jarvis 专题仍未开始。
+- Mobile U1 已完成；默认仍使用 Mock。U2 已接入 Today 读写接口（`GET /api/mobile/today` 与写操作端点），可通过 `--dart-define=USE_REMOTE=true` 开启；聊天、任务页/我的页、系统通知、同步协议、多会话与 Jarvis 专题仍未开始。
 
 ## 二、阶段完成度与口径
 
@@ -24,8 +24,8 @@
 | 阶段 3a | 记忆写入管线：异步抽取、校验、裁决、决策日志、评测 | 已完成 |
 | 阶段 3b | 记忆读取与 prompt 注入 | 部分完成：代码完成，默认关闭；`confirmed` 升级与确认交互未做 |
 | 阶段 4 | Jarvis 慢通道、长期任务、重规划、周复盘、任务专属记忆 | 未开始 |
-| Mobile U1 | Flutter Mock 版：外壳、今日页、对话页、调试面板 | 基本完成；改期入口、截图与真机验收待补 |
-| Mobile U2 | 真实后端接入、任务/我的页、通知 | 已开始：Today 只读接口已接入；聊天/写操作未接 |
+| Mobile U1 | Flutter Mock 版：外壳、今日页、对话页、调试面板 | 基本完成；真机验收待补 |
+| Mobile U2 | 真实后端接入、任务/我的页、通知 | 进行中：Today 读写已接入；聊天/任务页/我的页/通知未接 |
 | Mobile U3 | 同步协议、多会话与 Jarvis 专题 | 未开始 |
 
 ### 2.2 阶段口径
@@ -64,7 +64,7 @@
 | 对话连贯性：每条消息带最近对话，支持「第一个」「就那个」等指代 | 最近 12 条或 24 小时内对话进入上下文；检索查询由当前消息 + 最近 4 条用户消息组成（[history.py](../app/agents/friday/history.py)） | 已完成 | 无 |
 | 工具调用失败不污染外层事务，重放不重复写业务数据 | 每次工具执行在 savepoint 中；写工具按入站事件派生幂等键（[registry.py](../app/tools/registry.py)、[test_tool_savepoint.py](../tests/integration/test_tool_savepoint.py)） | 已完成 | 无 |
 | 每用户每日模型调用上限，防止失控烧钱 | `LLM_DAILY_LIMIT` 默认 200，按用户时区当日计数，超限返回固定文案（[gateway.py](../app/llm/gateway.py)） | 已完成 | 无 |
-| 移动端 Today 只读接口：按本地日期返回时间线、提醒与未排期任务 | `GET /api/mobile/today` 已实现；开发期用户头 `X-Butler-User`，支持 UUID 或飞书 open_id；简报暂返回空（[mobile.py](../app/api/routes/mobile.py)、[test_mobile_today.py](../tests/integration/test_mobile_today.py)） | 部分实现 | U2 后续补简报与写操作 |
+| 移动端 Today 接口：读取时间线、提醒与未排期任务，并支持完成/跳过/撤销/改期/排期/晚间复盘 | 读接口与写操作均已实现；开发期用户头 `X-Butler-User`，写接口要求 `Idempotency-Key` 并写入 `event_log`；提醒完成/跳过会取消触发并保留终态；简报暂返回空（[mobile.py](../app/api/routes/mobile.py)、[test_mobile_today.py](../tests/integration/test_mobile_today.py)、[test_mobile_today_write.py](../tests/integration/test_mobile_today_write.py)） | 已完成（Today） | U2 后续补简报与聊天 |
 
 ### 3.3 提醒、简报与主动触达
 
@@ -109,17 +109,17 @@
 |---|---|---|---|
 | Flutter 工程、设计令牌、浅/深色主题、7 组对比度 | 已实现（[tokens.dart](../mobile/lib/core/theme/tokens.dart)、[app_theme.dart](../mobile/lib/core/theme/app_theme.dart)、[color_contrast_test.dart](../mobile/test/color_contrast_test.dart)） | 已完成 | 无 |
 | 4 Tab 导航外壳：`/today`、`/chat`、`/tasks`、`/profile`，切换保留状态 | `StatefulShellRoute.indexedStack` 已实现；任务/我的为占位页（[app_router.dart](../mobile/lib/shell/app_router.dart)、[placeholder_page.dart](../mobile/lib/shell/placeholder_page.dart)） | 部分实现 | Mobile U2 |
-| 今日页：日期问候、晨间简报、时间线、完成/跳过/调整、未排期、晚间复盘入口 | 时间线、简报、未排期、晚间复盘、完成/跳过、未排期移入今天已实现，状态覆盖齐全；`reschedule` 仓库与控制器已实现，但页面还没有改期入口（[today_page.dart](../mobile/lib/features/today/today_page.dart)、[today_controller.dart](../mobile/lib/features/today/today_controller.dart)、[today_page_test.dart](../mobile/test/today_page_test.dart)） | 部分实现 | U1 收尾（补改期入口） |
+| 今日页：日期问候、晨间简报、时间线、完成/跳过/调整、未排期、晚间复盘入口 | 时间线、简报、未排期、晚间复盘、完成/跳过、长按改期、未排期移入今天均已实现；远程模式写操作已接真实接口（[today_page.dart](../mobile/lib/features/today/today_page.dart)、[today_controller.dart](../mobile/lib/features/today/today_controller.dart)、[today_page_test.dart](../mobile/test/today_page_test.dart)） | 已完成 | 无 |
 | 对话页：Friday 主对话、7 类卡片、流式回复、输入条、草稿、状态覆盖 | 已实现，7 类卡片均可渲染；流式为 Mock 逐段增长（[chat_page.dart](../mobile/lib/features/chat/chat_page.dart)、[chat_controller.dart](../mobile/lib/features/chat/chat_controller.dart)、[chat_page_test.dart](../mobile/test/chat_page_test.dart)） | 已完成 | 无 |
 | JarvisIntroCard：接受后依次出现诊断 ChoiceCard、ThinkingCard、PlanProposalCard | Mock 仓库已实现该顺序与终态约束（[mock_chat_repository.dart](../mobile/lib/data/mock/mock_chat_repository.dart)） | 仅 Mock | Mobile U3 |
 | 调试面板：模拟时间、网络、数据集、主题、文字缩放、发送失败 | 已实现，debug 下长按今日页标题进入（[debug_panel_page.dart](../mobile/lib/features/debug/debug_panel_page.dart)、[debug_panel_test.dart](../mobile/test/debug_panel_test.dart)） | 已完成 | 无 |
 | Mock 仓库与 Provider 装配：简单 Stream、模拟延迟、离线队列、错误注入 | 已实现；Provider 层只暴露接口，features 不直接 import data/mock（[providers.dart](../mobile/lib/core/providers.dart)、[mock_chat_repository.dart](../mobile/lib/data/mock/mock_chat_repository.dart)） | 已完成 | 无 |
-| 真实后端接入、真实流式、数据库读写 | Today 已接只读 API：`RemoteTodayRepository` + `HttpApiClient`，通过 `USE_REMOTE=true` 开启；聊天/写操作仍为 Mock（[remote_today_repository.dart](../mobile/lib/data/remote/remote_today_repository.dart)、[providers.dart](../mobile/lib/core/providers.dart)） | 部分实现 | Mobile U2：聊天/写操作/任务页/通知 |
+| 真实后端接入、真实流式、数据库读写 | Today 已接真实读写 API：`RemoteTodayRepository` + `HttpApiClient`，通过 `USE_REMOTE=true` 开启；聊天仍为 Mock（[remote_today_repository.dart](../mobile/lib/data/remote/remote_today_repository.dart)、[providers.dart](../mobile/lib/core/providers.dart)） | 部分实现 | Mobile U2：聊天/任务页/通知 |
 | 任务页/我的页内容 | 当前只有占位页 | 未实现 | Mobile U2 |
 | 系统通知、后台推送、通知权限 | 未实现，U1 明确不做 | 未实现 | Mobile U2/U3 |
 | 会话同步协议、多会话、Jarvis 专题、邀请卡幂等、PriorityAlert | 已从 U1 移出并归档，待后端接口方案确定（[mobile-sync-and-topics.md](./deferred/mobile-sync-and-topics.md)） | 未实现 | Mobile U3 |
 | 截图归档与真机验收 | 6 张浅/深色组件渲染截图已生成；真机安装验收待执行（[README.md](../mobile/README.md)、[screenshots](../mobile/screenshots)） | 部分实现 | U1 收尾 |
-| 单元/组件/对比度/缩放测试，analyze/format/test/build apk | 105 项测试通过（3 项截图生成测试默认跳过）；四条命令已通过（[README.md](../mobile/README.md)） | 已完成 | 无 |
+| 单元/组件/对比度/缩放测试，analyze/format/test/build apk | 109 项测试通过（3 项截图生成测试默认跳过）；四条命令已通过（[README.md](../mobile/README.md)） | 已完成 | 无 |
 
 ### 3.7 多模态与平台化
 
@@ -133,7 +133,7 @@
 
 1. **Jarvis 慢通道**：从智能体、状态机到长期任务、重规划、周复盘、任务专属记忆全部未开始。
 2. **记忆闭环**：检索注入代码已完成但默认关闭；`confirmed` 升级与确认交互未实现。
-3. **真实移动端数据**：Mobile 全部依赖 Mock，尚无后端 API/流式协议对接。
+3. **真实移动端数据**：Today 已接真实读写 API；聊天、任务页、我的页与流式协议仍依赖 Mock。
 4. **富消息渲染**：后端出站意图抽象存在，但飞书 adapter 只发文本，7 类卡片无法在真实渠道渲染。
 5. **多模态与多渠道**：语音/图片/文件、微信等渠道、iOS/HarmonyOS、多租户均未排期。
 

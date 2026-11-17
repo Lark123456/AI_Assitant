@@ -2,9 +2,24 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/clock.dart';
 import '../../core/providers.dart';
+import '../../core/strings.dart';
 import '../../domain/enums.dart';
 import '../../domain/models/today.dart';
 import '../../domain/repositories/today_repository.dart';
+
+/// 写操作失败时在页面展示一次提示；null 表示无待展示错误。
+class TodayActionError extends Notifier<String?> {
+  @override
+  String? build() => null;
+
+  void show(String message) => state = message;
+
+  void clear() => state = null;
+}
+
+final todayActionErrorProvider = NotifierProvider<TodayActionError, String?>(
+  TodayActionError.new,
+);
 
 class TodayState {
   const TodayState({required this.date, required this.day});
@@ -68,7 +83,34 @@ class TodayController extends AsyncNotifier<TodayState> {
   }
 
   Future<void> moveToToday(String itemId, DateTime start) async {
-    await _apply((repository) => repository.moveToToday(itemId, start));
+    final current = state.value;
+    if (current == null) return;
+    try {
+      final updated = await ref
+          .read(todayRepositoryProvider)
+          .moveToToday(itemId, start);
+      final items = [
+        ...current.day.items.where((item) => item.id != updated.id),
+        if (updated.start != null) updated,
+      ]..sort((left, right) => left.start!.compareTo(right.start!));
+      final unscheduled = current.day.unscheduled
+          .where((item) => item.id != itemId)
+          .toList();
+      state = AsyncData(
+        TodayState(
+          date: current.date,
+          day: DayView(
+            date: current.day.date,
+            items: items,
+            unscheduled: unscheduled,
+            morningBrief: current.day.morningBrief,
+            eveningBrief: current.day.eveningBrief,
+          ),
+        ),
+      );
+    } catch (_) {
+      await _handleActionError();
+    }
   }
 
   Future<void> submitEveningReview() async {
@@ -78,7 +120,12 @@ class TodayController extends AsyncNotifier<TodayState> {
       for (final item in [...current.day.items, ...current.day.unscheduled])
         item.id: item.status == TodayItemStatus.done,
     };
-    await ref.read(todayRepositoryProvider).submitEveningReview(completion);
+    try {
+      await ref.read(todayRepositoryProvider).submitEveningReview(completion);
+    } catch (_) {
+      await _handleActionError();
+      return;
+    }
     await _load(current.date);
   }
 
@@ -97,8 +144,17 @@ class TodayController extends AsyncNotifier<TodayState> {
   ) async {
     final current = state.value;
     if (current == null) return;
-    final updated = await action(ref.read(todayRepositoryProvider));
-    _replaceItem(current, updated);
+    try {
+      final updated = await action(ref.read(todayRepositoryProvider));
+      _replaceItem(current, updated);
+    } catch (_) {
+      await _handleActionError();
+    }
+  }
+
+  Future<void> _handleActionError() async {
+    ref.read(todayActionErrorProvider.notifier).show(S.actionFailed);
+    await _load(_date);
   }
 
   void _replaceItem(TodayState current, TodayItem updated) {
@@ -120,6 +176,11 @@ class TodayController extends AsyncNotifier<TodayState> {
     final unscheduled = current.day.unscheduled
         .where((item) => item.id != updated.id)
         .toList();
+    if (updated.start == null &&
+        updated.kind == TodayItemKind.task &&
+        updated.status == TodayItemStatus.planned) {
+      unscheduled.add(updated);
+    }
 
     state = AsyncData(
       TodayState(

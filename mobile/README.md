@@ -1,9 +1,9 @@
-# Butler Mobile（U1）
+# Butler Mobile（U1/U2）
 
 Flutter 子项目，对应 `docs/mobile-u1-plan.md`。
 历史技术报告已归档到 `docs/archive/mobile-u1-technical-plan-v2.4.4.md`（冻结）；
 会话同步、多会话与专题、邀请卡、PriorityAlert 见 `docs/deferred/mobile-sync-and-topics.md`（延后）。
-U1 只做客户端与 Mock，不连接真实后端。
+U1 只做客户端与 Mock；U2 起接入真实后端，当前仅 Today 页面。
 
 ## 环境
 
@@ -112,9 +112,9 @@ $env:SCREENSHOTS="1"
 
 当前环境未连接 Android 设备或模拟器，因此这些是组件渲染截图，不是真机截图；真机验收仍标记为「待验收」。
 
-## 远程 Today 只读模式（U2 第一批）
+## 远程 Today（U2）
 
-默认仍是 Mock；用 `--dart-define` 开启真实 Today 只读数据：
+默认仍是 Mock；用 `--dart-define` 开启真实 Today 数据：
 
 ```powershell
 adb reverse tcp:8000 tcp:8000
@@ -125,12 +125,15 @@ adb reverse tcp:8000 tcp:8000
 ```
 
 后端接口：`GET /api/mobile/today?date=YYYY-MM-DD`，开发期用户头 `X-Butler-User`。
-当前只读：展示真实时间线、提醒与未排期任务；完成/跳过/改期/复盘提交在远程模式下禁用。
+写操作：`POST /api/mobile/today/items/{id}/complete|skip|restore|reschedule`、
+`POST /api/mobile/today/tasks/{id}/schedule`、`POST /api/mobile/today/review`。
+写接口必须带 `Idempotency-Key`，重复提交同一键返回上次结果。
+已完成/跳过的提醒会取消触发并保留终态；未勾选的晚间复盘条目保持原状态。
 晨间/晚间简报暂返回空，聊天仍为 Mock。`adb reverse` 需要手机开启 USB 调试；也可以把后端改为局域网地址。
 
 ## 验收状态
 
-- `analyze` / `format` / `test` / `build apk --debug`：通过（105 项测试；3 项截图生成测试默认跳过）
+- `analyze` / `format` / `test` / `build apk --debug`：通过（109 项测试；3 项截图生成测试默认跳过）
 - APK SDK：`sdkVersion 26`、`targetSdkVersion 36`
 - 应用名：`Butler`（Android label；包名仍为 `com.butler.mobile`）
 - 最新 Debug APK：`build/app/outputs/flutter-apk/app-debug.apk`

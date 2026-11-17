@@ -69,6 +69,7 @@ abstract final class S {
   static const detailReason = '理由';
   static const invalidTime = '新时间需要早于结束时间';
   static const timeUpdated = '时间已更新';
+  static const actionFailed = '操作失败，请稍后重试';
   static const briefAdjustTitle = '调整晨间简报';
   static const briefAdjustLater = '晚一点';
   static const briefAdjustShorter = '精简一点';
