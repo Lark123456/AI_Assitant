@@ -7,14 +7,16 @@ from fastapi import FastAPI
 
 from app.api.routes.mobile import router
 from app.core.clock import UTC, FakeClock
+from app.core.config import Settings
 from app.db.models import ChannelIdentity, PlannedBlock, TriggerInstance, User, WorkItem
 
 
-def _app(db, clock: FakeClock) -> FastAPI:
+def _app(db, clock: FakeClock, settings: Settings | None = None) -> FastAPI:
     app = FastAPI()
     app.include_router(router)
     app.state.sessionmaker = db
     app.state.clock = clock
+    app.state.settings = settings or Settings(_env_file=None)
     return app
 
 
@@ -184,6 +186,50 @@ async def test_today_accepts_open_id_header_and_default_date(db, fake_clock):
     assert bare.status_code == 200
 
 
+async def test_today_default_date_uses_local_calendar_day(db, fake_clock):
+    user = await _seed(db, fake_clock)
+    async with db() as session:
+        early = WorkItem(
+            user_id=user.id,
+            type="item",
+            status="active",
+            title="凌晨复盘",
+            created_at=fake_clock.now(),
+            updated_at=fake_clock.now(),
+        )
+        session.add(early)
+        await session.flush()
+        session.add(
+            PlannedBlock(
+                user_id=user.id,
+                work_item_id=early.id,
+                starts_at=dt.datetime(2026, 1, 1, 18, 0, tzinfo=UTC),
+                ends_at=dt.datetime(2026, 1, 1, 19, 0, tzinfo=UTC),
+                status="planned",
+                assigned_by="friday",
+                compressible=True,
+                created_at=fake_clock.now(),
+                updated_at=fake_clock.now(),
+            )
+        )
+        await session.commit()
+
+    fake_clock.advance_to(dt.datetime(2026, 1, 1, 18, 30, tzinfo=UTC))
+    app = _app(db, fake_clock)
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.get(
+            "/api/mobile/today", headers={"X-Butler-User": str(user.id)}
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["date"] == "2026-01-02"
+    assert [item["title"] for item in body["items"]] == ["凌晨复盘"]
+
+
 async def test_today_requires_user_header_and_valid_date(db, fake_clock):
     await _seed(db, fake_clock)
     app = _app(db, fake_clock)
@@ -200,3 +246,53 @@ async def test_today_requires_user_header_and_valid_date(db, fake_clock):
 
     assert missing.status_code == 401
     assert invalid.status_code == 400
+
+
+async def test_today_enforces_allowed_open_ids(db, fake_clock):
+    user = await _seed(db, fake_clock)
+    async with db() as session:
+        session.add(
+            ChannelIdentity(
+                user_id=user.id,
+                channel="feishu",
+                external_id="ou_other",
+                tenant_id="tenant-1",
+            )
+        )
+        await session.commit()
+
+    allowed_app = _app(
+        db, fake_clock, Settings(_env_file=None, allowed_open_ids="ou_test")
+    )
+    denied_app = _app(
+        db, fake_clock, Settings(_env_file=None, allowed_open_ids="ou_missing")
+    )
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=allowed_app), base_url="http://test"
+    ) as client:
+        by_open_id = await client.get(
+            "/api/mobile/today", headers={"X-Butler-User": "ou_test"}
+        )
+        by_uuid = await client.get(
+            "/api/mobile/today", headers={"X-Butler-User": str(user.id)}
+        )
+        by_other_identity = await client.get(
+            "/api/mobile/today", headers={"X-Butler-User": "ou_other"}
+        )
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=denied_app), base_url="http://test"
+    ) as client:
+        denied = await client.get(
+            "/api/mobile/today", headers={"X-Butler-User": "ou_test"}
+        )
+        denied_uuid = await client.get(
+            "/api/mobile/today", headers={"X-Butler-User": str(user.id)}
+        )
+
+    assert by_open_id.status_code == 200
+    assert by_uuid.status_code == 200
+    assert by_other_identity.status_code == 403
+    assert denied.status_code == 403
+    assert denied_uuid.status_code == 403

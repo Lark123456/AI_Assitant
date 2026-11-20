@@ -15,13 +15,13 @@ from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy import and_, or_, select
+from sqlalchemy import and_, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.clock import Clock
 from app.core.config import Settings, get_settings
 from app.core.ids import new_trace_id
-from app.core.timeutil import day_window_for_date, local_date_of
+from app.core.timeutil import day_window_for_date
 from app.db.models import ChannelIdentity, PlannedBlock, TriggerInstance, User, WorkItem
 from app.engine.events import append_event, find_event_by_idempotency_key
 from app.engine.materializer import ensure_block_triggers
@@ -63,34 +63,68 @@ async def get_session(request: Request) -> AsyncIterator[AsyncSession]:
         yield session
 
 
+def _allowed_open_ids(settings: Settings) -> set[str]:
+    return {value.strip() for value in settings.allowed_open_ids.split(",") if value.strip()}
+
+
+async def _check_whitelist(
+    session: AsyncSession,
+    user: User,
+    settings: Settings,
+    *,
+    external_id: str | None = None,
+) -> None:
+    """白名单非空时校验身份：外部 id 请求校验命中的身份，UUID 请求校验用户任一身份。"""
+    allowed = _allowed_open_ids(settings)
+    if not allowed:
+        return
+    if external_id is not None:
+        if external_id not in allowed:
+            raise HTTPException(status_code=403, detail="用户不在白名单")
+        return
+    external_ids = (
+        await session.execute(
+            select(ChannelIdentity.external_id).where(ChannelIdentity.user_id == user.id)
+        )
+    ).scalars().all()
+    if not any(value in allowed for value in external_ids):
+        raise HTTPException(status_code=403, detail="用户不在白名单")
+
+
 async def get_mobile_user(
+    request: Request,
     session: Annotated[AsyncSession, Depends(get_session)],
     x_butler_user: Annotated[str | None, Header(alias="X-Butler-User")] = None,
 ) -> User:
-    """开发期用户识别：UUID 优先，其次按渠道外部 id 查找。"""
+    """开发期用户识别：UUID 优先，其次按渠道外部 id 查找，并执行白名单。"""
     if not x_butler_user or not x_butler_user.strip():
         raise HTTPException(status_code=401, detail="缺少 X-Butler-User")
     raw = x_butler_user.strip()
     value = raw.removeprefix("feishu:")
 
     user: User | None = None
+    matched_external_id: str | None = None
     try:
         user = await session.get(User, uuid.UUID(value))
     except ValueError:
         user = None
-    if user is not None:
-        return user
 
-    identity = (
-        await session.execute(
-            select(ChannelIdentity).where(ChannelIdentity.external_id == value)
-        )
-    ).scalars().first()
-    if identity is not None:
-        user = await session.get(User, identity.user_id)
-        if user is not None:
-            return user
-    raise HTTPException(status_code=401, detail="未知用户")
+    if user is None:
+        identity = (
+            await session.execute(
+                select(ChannelIdentity).where(ChannelIdentity.external_id == value)
+            )
+        ).scalars().first()
+        if identity is not None:
+            matched_external_id = identity.external_id
+            user = await session.get(User, identity.user_id)
+
+    if user is None:
+        raise HTTPException(status_code=401, detail="未知用户")
+    await _check_whitelist(
+        session, user, _settings(request), external_id=matched_external_id
+    )
+    return user
 
 
 async def require_idempotency_key(
@@ -135,7 +169,7 @@ def _reminder_status(trigger: TriggerInstance) -> str:
         "claimed": "planned",
         "fired": "done",
         "missed": "skipped",
-    }.get(trigger.status, "planned")
+    }.get(trigger.status, "skipped")
 
 
 def _block_item(block: PlannedBlock, title: str, tz: str) -> dict:
@@ -312,26 +346,43 @@ async def _mutate_item(
     trigger = item
     assert isinstance(trigger, TriggerInstance)
     ack = (trigger.payload or {}).get("ack")
+    if trigger.status == "failed" or (
+        trigger.status == "dropped" and ack not in ("done", "skipped")
+    ):
+        raise HTTPException(status_code=409, detail="提醒当前状态不可操作")
     if action == "complete" and trigger.status in ("pending", "claimed"):
         trigger.status = "dropped"
         trigger.payload = {**(trigger.payload or {}), "ack": "done"}
     elif action == "skip" and trigger.status in ("pending", "claimed"):
         trigger.status = "dropped"
         trigger.payload = {**(trigger.payload or {}), "ack": "skipped"}
-    elif action == "restore" and trigger.status == "dropped" and ack in ("done", "skipped"):
-        trigger.status = "pending"
-        trigger.payload = {
-            key: value for key, value in (trigger.payload or {}).items() if key != "ack"
-        }
+    elif action == "restore":
+        if trigger.status == "dropped" and ack in ("done", "skipped"):
+            trigger.status = "pending"
+            trigger.payload = {
+                key: value
+                for key, value in (trigger.payload or {}).items()
+                if key != "ack"
+            }
+        elif trigger.status in ("fired", "missed"):
+            raise HTTPException(status_code=409, detail="提醒已结束，无法撤销")
     return _reminder_item(trigger, user.timezone)
+
+
+def _event_key(user: User, action: str, idempotency_key: str) -> str:
+    return f"mobile:{user.id}:{action}:{idempotency_key}"
 
 
 async def _replay(
     session: AsyncSession, *, user: User, action: str, idempotency_key: str
 ) -> dict | None:
-    event = await find_event_by_idempotency_key(
-        session, f"mobile:{user.id}:{action}:{idempotency_key}"
+    """同键请求在事务内串行：先取 advisory lock，再查既有结果。"""
+    event_key = _event_key(user, action, idempotency_key)
+    await session.execute(
+        text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))"),
+        {"key": event_key},
     )
+    event = await find_event_by_idempotency_key(session, event_key)
     if event is None:
         return None
     result = (event.payload or {}).get("result")
@@ -358,7 +409,7 @@ async def _record(
         payload={"action": action, "result": result},
         trace_id=new_trace_id(),
         clock=clock,
-        idempotency_key=f"mobile:{user.id}:{action}:{idempotency_key}",
+        idempotency_key=_event_key(user, action, idempotency_key),
     )
     await session.commit()
 
@@ -378,7 +429,8 @@ async def get_today(
         except ValueError as exc:
             raise HTTPException(status_code=400, detail="date 必须是 YYYY-MM-DD") from exc
     else:
-        day = local_date_of(clock.now(), user.timezone, user.day_start)
+        # 与下面的本地零点窗口保持一致；不按 day_start 切日。
+        day = clock.now().astimezone(ZoneInfo(user.timezone)).date()
 
     # 与移动端 DayView 的本地零点对齐；不按 user.day_start 切日。
     start_utc, end_utc = day_window_for_date(day, user.timezone, dt.time(0, 0))
@@ -563,8 +615,15 @@ async def reschedule_today_item(
         raise HTTPException(status_code=400, detail="只有日程块支持改期")
     block = item
     assert isinstance(block, PlannedBlock)
+    if block.status != "planned":
+        raise HTTPException(status_code=400, detail="只有未结束的日程块可以改期")
     if starts_at >= block.ends_at:
         raise HTTPException(status_code=400, detail="新的开始时间必须早于结束时间")
+    tz = ZoneInfo(user.timezone)
+    if starts_at.astimezone(tz).date() != block.starts_at.astimezone(tz).date():
+        raise HTTPException(status_code=400, detail="改期不能跨天")
+    if block.ends_at - starts_at < dt.timedelta(minutes=5):
+        raise HTTPException(status_code=400, detail="改期后时长不能少于 5 分钟")
 
     block.starts_at = starts_at
     block.status = "planned"
@@ -626,8 +685,10 @@ async def schedule_today_task(
         raise HTTPException(status_code=400, detail="只有未完成任务可以排期")
 
     starts_at = _aware_time(body.starts_at)
-    ends_at = starts_at + dt.timedelta(minutes=body.duration_min)
     now = request.app.state.clock.now()
+    if starts_at <= now:
+        raise HTTPException(status_code=400, detail="开始时间必须晚于当前时间")
+    ends_at = starts_at + dt.timedelta(minutes=body.duration_min)
     block = PlannedBlock(
         user_id=user.id,
         work_item_id=task.id,
@@ -670,25 +731,34 @@ async def submit_today_review(
     session: Annotated[AsyncSession, Depends(get_session)],
     idempotency_key: Annotated[str, Depends(require_idempotency_key)],
 ) -> dict:
-    """晚间复盘：勾选完成的条目置为 done，未勾选的保持原状态。"""
+    """晚间复盘：勾选完成的条目置为 done，未勾选保持原状态；失效/不可操作条目跳过。"""
     replay = await _replay(session, user=user, action="review", idempotency_key=idempotency_key)
     if replay is not None:
         return replay
 
     updated = 0
+    skipped_ids: list[str] = []
+    seen: set[str] = set()
     for entry in body.results:
-        if not entry.done:
+        if not entry.done or entry.item_id in seen:
             continue
-        await _mutate_item(
-            session,
-            user=user,
-            item_id=entry.item_id,
-            action="complete",
-            settings=_settings(request),
-            clock=request.app.state.clock,
-        )
+        seen.add(entry.item_id)
+        try:
+            await _mutate_item(
+                session,
+                user=user,
+                item_id=entry.item_id,
+                action="complete",
+                settings=_settings(request),
+                clock=request.app.state.clock,
+            )
+        except HTTPException as exc:
+            if exc.status_code not in (404, 409):
+                raise
+            skipped_ids.append(entry.item_id)
+            continue
         updated += 1
-    result = {"updated": updated}
+    result = {"updated": updated, "skipped_ids": skipped_ids}
     await _record(
         session,
         user=user,

@@ -187,6 +187,7 @@ Jarvis 这三个字目前只出现在：模型档位配置、计划表的「谁�
 | `NUDGE_KILL_SWITCH` | 主动消息总开关（true = 只保留承诺类） | false |
 | `MATERIALIZE_INTERVAL_SECONDS` | 排班员运行间隔（秒） | 300 |
 | `ENABLE_CONSOLE` | 本地测试接口开关 | 0（关闭） |
+| `ENABLE_MOBILE_API` | 移动端 HTTP API 开关（开发期用户头） | 0（关闭） |
 | `LOG_LEVEL` | 日志详细程度 | INFO |
 
 简报时间、免打扰时段、每日预算、消息类别开关不在这张表里——它们存在数据库的偏好表里，用对话就能改

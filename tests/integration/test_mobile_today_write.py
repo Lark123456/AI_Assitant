@@ -1,5 +1,6 @@
 """U2 移动端 Today 写操作：完成/跳过/撤销/改期/排期/复盘与幂等。"""
 
+import asyncio
 import datetime as dt
 
 import httpx
@@ -192,7 +193,7 @@ async def test_skip_and_restore_block(db, fake_clock, settings):
         assert trigger.status == "pending"
 
 
-async def test_reschedule_block_keeps_end_and_rejects_invalid_start(db, fake_clock, settings):
+async def test_reschedule_block_validates_status_duration_and_day(db, fake_clock, settings):
     seeded = await _seed(db, fake_clock)
     app = _app(db, fake_clock, settings)
 
@@ -223,6 +224,26 @@ async def test_reschedule_block_keeps_end_and_rejects_invalid_start(db, fake_clo
             json={"startsAt": "2026-01-01T10:30:00+08:00"},
             headers=_headers(seeded.user, "reschedule-3"),
         )
+        short = await client.post(
+            f"/api/mobile/today/items/{seeded.morning.id}/reschedule",
+            json={"startsAt": "2026-01-01T09:56:00+08:00"},
+            headers=_headers(seeded.user, "reschedule-short"),
+        )
+        five_minutes = await client.post(
+            f"/api/mobile/today/items/{seeded.morning.id}/reschedule",
+            json={"startsAt": "2026-01-01T09:55:00+08:00"},
+            headers=_headers(seeded.user, "reschedule-five"),
+        )
+        cross_day = await client.post(
+            f"/api/mobile/today/items/{seeded.morning.id}/reschedule",
+            json={"startsAt": "2025-12-31T09:00:00+08:00"},
+            headers=_headers(seeded.user, "reschedule-cross-day"),
+        )
+        terminal = await client.post(
+            f"/api/mobile/today/items/{seeded.afternoon.id}/reschedule",
+            json={"startsAt": "2026-01-01T12:30:00+08:00"},
+            headers=_headers(seeded.user, "reschedule-terminal"),
+        )
 
     assert moved.status_code == 200
     assert moved.json()["start"] == "2026-01-01T09:30:00+08:00"
@@ -230,6 +251,11 @@ async def test_reschedule_block_keeps_end_and_rejects_invalid_start(db, fake_clo
     assert moved.json()["durationMin"] == 30
     assert invalid.status_code == 400
     assert task_invalid.status_code == 400
+    assert short.status_code == 400
+    assert five_minutes.status_code == 200
+    assert five_minutes.json()["durationMin"] == 5
+    assert cross_day.status_code == 400
+    assert terminal.status_code == 400
 
 
 async def test_complete_and_restore_unscheduled_task(db, fake_clock, settings):
@@ -323,6 +349,114 @@ async def test_schedule_task_creates_single_block(db, fake_clock, settings):
         assert count == 1
 
 
+async def test_schedule_task_rejects_past_start(db, fake_clock, settings):
+    seeded = await _seed(db, fake_clock)
+    app = _app(db, fake_clock, settings)
+
+    async with db() as session:
+        task = (
+            await session.execute(
+                select(WorkItem).where(
+                    WorkItem.user_id == seeded.user.id, WorkItem.title == "整理笔记"
+                )
+            )
+        ).scalar_one()
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        past = await client.post(
+            f"/api/mobile/today/tasks/{task.id}/schedule",
+            json={"startsAt": "2026-01-01T07:00:00+08:00"},
+            headers=_headers(seeded.user, "schedule-past"),
+        )
+        now = await client.post(
+            f"/api/mobile/today/tasks/{task.id}/schedule",
+            json={"startsAt": "2026-01-01T08:00:00+08:00"},
+            headers=_headers(seeded.user, "schedule-now"),
+        )
+
+    assert past.status_code == 400
+    assert now.status_code == 400
+
+
+async def test_schedule_task_same_key_concurrent_creates_one_block(db, fake_clock, settings):
+    seeded = await _seed(db, fake_clock)
+    app = _app(db, fake_clock, settings)
+
+    async with db() as session:
+        task = (
+            await session.execute(
+                select(WorkItem).where(
+                    WorkItem.user_id == seeded.user.id, WorkItem.title == "整理笔记"
+                )
+            )
+        ).scalar_one()
+
+    path = f"/api/mobile/today/tasks/{task.id}/schedule"
+    body = {"startsAt": "2026-01-01T18:00:00+08:00", "durationMin": 45}
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        first, second = await asyncio.gather(
+            client.post(path, json=body, headers=_headers(seeded.user, "concurrent-1")),
+            client.post(path, json=body, headers=_headers(seeded.user, "concurrent-1")),
+        )
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert first.json() == second.json()
+
+    async with db() as session:
+        count = (
+            await session.execute(
+                select(func.count())
+                .select_from(PlannedBlock)
+                .where(PlannedBlock.work_item_id == task.id)
+            )
+        ).scalar_one()
+        assert count == 1
+
+
+async def test_reminder_rejects_failed_and_cancelled_states(db, fake_clock, settings):
+    seeded = await _seed(db, fake_clock)
+    async with db() as session:
+        failed = TriggerInstance(
+            user_id=seeded.user.id,
+            kind="reminder",
+            key=f"reminder:{seeded.user.id}:failed",
+            fire_at=dt.datetime(2026, 1, 1, 3, 30, tzinfo=UTC),
+            tz=seeded.user.timezone,
+            payload={"note": "失败提醒"},
+            status="failed",
+            created_at=fake_clock.now(),
+        )
+        cancelled = TriggerInstance(
+            user_id=seeded.user.id,
+            kind="reminder",
+            key=f"reminder:{seeded.user.id}:cancelled",
+            fire_at=dt.datetime(2026, 1, 1, 4, 30, tzinfo=UTC),
+            tz=seeded.user.timezone,
+            payload={"note": "已取消提醒"},
+            status="dropped",
+            created_at=fake_clock.now(),
+        )
+        session.add_all([failed, cancelled])
+        await session.commit()
+
+    app = _app(db, fake_clock, settings)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        for trigger, label in ((failed, "failed"), (cancelled, "cancelled")):
+            for action in ("complete", "skip", "restore"):
+                response = await client.post(
+                    f"/api/mobile/today/items/{trigger.id}/{action}",
+                    headers=_headers(seeded.user, f"{label}-{action}"),
+                )
+                assert response.status_code == 409, (label, action, response.text)
+
+
 async def test_reminder_complete_cancels_trigger_and_restore_reopens(db, fake_clock, settings):
     seeded = await _seed(db, fake_clock)
     app = _app(db, fake_clock, settings)
@@ -386,13 +520,61 @@ async def test_review_marks_done_and_keeps_unchecked_status(db, fake_clock, sett
         )
 
     assert response.status_code == 200
-    assert response.json() == {"updated": 1}
+    assert response.json() == {"updated": 1, "skipped_ids": []}
 
     async with db() as session:
         morning = await session.get(PlannedBlock, seeded.morning.id)
         afternoon = await session.get(PlannedBlock, seeded.afternoon.id)
         assert morning is not None and morning.status == "done"
         assert afternoon is not None and afternoon.status == "skipped"
+
+
+async def test_review_skips_invalid_and_unactionable_items(db, fake_clock, settings):
+    seeded = await _seed(db, fake_clock)
+    async with db() as session:
+        failed = TriggerInstance(
+            user_id=seeded.user.id,
+            kind="reminder",
+            key=f"reminder:{seeded.user.id}:review-failed",
+            fire_at=dt.datetime(2026, 1, 1, 3, 30, tzinfo=UTC),
+            tz=seeded.user.timezone,
+            payload={"note": "失败提醒"},
+            status="failed",
+            created_at=fake_clock.now(),
+        )
+        session.add(failed)
+        await session.commit()
+
+    missing = "00000000-0000-0000-0000-000000000000"
+    app = _app(db, fake_clock, settings)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.post(
+            "/api/mobile/today/review",
+            json={
+                "results": [
+                    {"itemId": str(seeded.morning.id), "done": True},
+                    {"itemId": missing, "done": True},
+                    {"itemId": str(failed.id), "done": True},
+                    {"itemId": str(seeded.afternoon.id), "done": False},
+                ]
+            },
+            headers=_headers(seeded.user, "review-skip"),
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["updated"] == 1
+    assert set(body["skipped_ids"]) == {missing, str(failed.id)}
+
+    async with db() as session:
+        morning = await session.get(PlannedBlock, seeded.morning.id)
+        afternoon = await session.get(PlannedBlock, seeded.afternoon.id)
+        trigger = await session.get(TriggerInstance, failed.id)
+        assert morning is not None and morning.status == "done"
+        assert afternoon is not None and afternoon.status == "skipped"
+        assert trigger is not None and trigger.status == "failed"
 
 
 async def test_write_requires_idempotency_key_and_valid_item(db, fake_clock, settings):

@@ -20,6 +20,7 @@ class Settings(BaseSettings):
     default_timezone: str = "Asia/Shanghai"
     allowed_open_ids: str = ""  # 逗号分隔的外部 id（open_id 等）白名单；空 = 不限制；对所有渠道生效
     enable_console: bool = False  # Console HTTP 路由开关（本地测试用），默认关闭
+    enable_mobile_api: bool = False  # 移动端 HTTP API 开关；开发期鉴权，默认关闭
     llm_daily_limit: int = 200  # 每用户每日 LLM 调用上限（按用户时区当日计）；<=0 不限制
     worker_poll_interval: float = 1.0
     worker_batch_size: int = 10

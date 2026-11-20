@@ -75,9 +75,13 @@ def create_app() -> FastAPI:
     app.state.adapters = adapters
     app.state.clock = clock
     app.state.sessionmaker = sessionmaker
+    app.state.settings = settings
     if settings.enable_console:
         app.include_router(console_router)
-    app.include_router(mobile_router)
+    if settings.enable_mobile_api:
+        if not settings.allowed_open_ids.strip():
+            logger.warning("mobile API enabled without ALLOWED_OPEN_IDS: dev auth only")
+        app.include_router(mobile_router)
     app.include_router(health_router)
     return app
 

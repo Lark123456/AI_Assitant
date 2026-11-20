@@ -1,7 +1,7 @@
 # Butler 功能对照表
 
 > 核对日期：2026-11-17  
-> 代码基线：`master` @ `14ebeb1` + U2 Today 写操作（未提交）  
+> 代码基线：`master` @ `c35f0ea` + 移动端 API 加固  
 > 口径：以已确认的契约与执行计划为准，对照当前代码、测试与运行配置。  
 > 依据：[contracts.md](./contracts.md)、[system-guide.md](./system-guide.md)、[mobile-u1-plan.md](./mobile-u1-plan.md)、[deferred/mobile-sync-and-topics.md](./deferred/mobile-sync-and-topics.md)、代码与测试。  
 > 说明：`system-guide.md` 第二节的能力清单停留在阶段 3a，本表以当前代码为准；两者冲突时以本表与 `contracts.md` 为准。
@@ -64,7 +64,7 @@
 | 对话连贯性：每条消息带最近对话，支持「第一个」「就那个」等指代 | 最近 12 条或 24 小时内对话进入上下文；检索查询由当前消息 + 最近 4 条用户消息组成（[history.py](../app/agents/friday/history.py)） | 已完成 | 无 |
 | 工具调用失败不污染外层事务，重放不重复写业务数据 | 每次工具执行在 savepoint 中；写工具按入站事件派生幂等键（[registry.py](../app/tools/registry.py)、[test_tool_savepoint.py](../tests/integration/test_tool_savepoint.py)） | 已完成 | 无 |
 | 每用户每日模型调用上限，防止失控烧钱 | `LLM_DAILY_LIMIT` 默认 200，按用户时区当日计数，超限返回固定文案（[gateway.py](../app/llm/gateway.py)） | 已完成 | 无 |
-| 移动端 Today 接口：读取时间线、提醒与未排期任务，并支持完成/跳过/撤销/改期/排期/晚间复盘 | 读接口与写操作均已实现；开发期用户头 `X-Butler-User`，写接口要求 `Idempotency-Key` 并写入 `event_log`；提醒完成/跳过会取消触发并保留终态；简报暂返回空（[mobile.py](../app/api/routes/mobile.py)、[test_mobile_today.py](../tests/integration/test_mobile_today.py)、[test_mobile_today_write.py](../tests/integration/test_mobile_today_write.py)） | 已完成（Today） | U2 后续补简报与聊天 |
+| 移动端 Today 接口：读取时间线、提醒与未排期任务，并支持完成/跳过/撤销/改期/排期/晚间复盘 | 读接口与写操作均已实现，需 `ENABLE_MOBILE_API=1` 开启；开发期用户头 `X-Butler-User` 并受 `ALLOWED_OPEN_IDS` 约束；写接口要求 `Idempotency-Key`，同键请求用事务级 advisory lock 串行；提醒完成/跳过会取消触发并保留终态；简报暂返回空（[mobile.py](../app/api/routes/mobile.py)、[test_mobile_today.py](../tests/integration/test_mobile_today.py)、[test_mobile_today_write.py](../tests/integration/test_mobile_today_write.py)） | 已完成（Today） | U2 后续补简报与聊天 |
 
 ### 3.3 提醒、简报与主动触达
 
