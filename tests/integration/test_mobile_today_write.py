@@ -349,6 +349,49 @@ async def test_schedule_task_creates_single_block(db, fake_clock, settings):
         assert count == 1
 
 
+async def test_schedule_task_allows_multiple_blocks(db, fake_clock, settings):
+    seeded = await _seed(db, fake_clock)
+    app = _app(db, fake_clock, settings)
+
+    async with db() as session:
+        task = (
+            await session.execute(
+                select(WorkItem).where(
+                    WorkItem.user_id == seeded.user.id, WorkItem.title == "整理笔记"
+                )
+            )
+        ).scalar_one()
+
+    path = f"/api/mobile/today/tasks/{task.id}/schedule"
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        first = await client.post(
+            path,
+            json={"startsAt": "2026-01-01T18:00:00+08:00"},
+            headers=_headers(seeded.user, "multi-1"),
+        )
+        second = await client.post(
+            path,
+            json={"startsAt": "2026-01-01T20:00:00+08:00"},
+            headers=_headers(seeded.user, "multi-2"),
+        )
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert first.json()["id"] != second.json()["id"]
+
+    async with db() as session:
+        count = (
+            await session.execute(
+                select(func.count())
+                .select_from(PlannedBlock)
+                .where(PlannedBlock.work_item_id == task.id)
+            )
+        ).scalar_one()
+        assert count == 2
+
+
 async def test_schedule_task_rejects_past_start(db, fake_clock, settings):
     seeded = await _seed(db, fake_clock)
     app = _app(db, fake_clock, settings)

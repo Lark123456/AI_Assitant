@@ -684,6 +684,7 @@ async def schedule_today_task(
     if task.status != "active":
         raise HTTPException(status_code=400, detail="只有未完成任务可以排期")
 
+    # 允许同一任务有多个块（分段推进），因此不在此处做唯一性限制。
     starts_at = _aware_time(body.starts_at)
     now = request.app.state.clock.now()
     if starts_at <= now:
