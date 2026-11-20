@@ -23,10 +23,11 @@ DateTime? resolveAdjustedStart(TodayItem item, TimeOfDay picked) {
     picked.hour,
     picked.minute,
   );
-  if (item.kind == TodayItemKind.block &&
-      item.end != null &&
-      !item.end!.isAfter(next)) {
-    return null;
+  if (item.kind == TodayItemKind.block && item.end != null) {
+    if (!item.end!.isAfter(next) ||
+        item.end!.difference(next) < const Duration(minutes: 5)) {
+      return null;
+    }
   }
   return next;
 }
@@ -38,6 +39,28 @@ String formatItemTime(TodayItem item) {
     return '${formatClockTime(start)}–${formatClockTime(item.end!)}';
   }
   return formatClockTime(start);
+}
+
+/// 未排期任务的可排期开始时间；过去日期或当天已无可用时段时返回 null。
+DateTime? nextScheduleStart(DateTime now, DateTime day) {
+  final target = DateTime(day.year, day.month, day.day);
+  final today = DateTime(now.year, now.month, now.day);
+  if (target.isBefore(today)) return null;
+  if (target.isAfter(today)) {
+    return DateTime(day.year, day.month, day.day, 18);
+  }
+
+  final evening = DateTime(now.year, now.month, now.day, 18);
+  final earliest = now.add(const Duration(minutes: 5));
+  final earliestDay = DateTime(earliest.year, earliest.month, earliest.day);
+  if (!earliestDay.isAtSameMomentAs(today)) return null;
+  if (evening.isAfter(earliest)) return evening;
+
+  final totalMinutes = earliest.hour * 60 + earliest.minute;
+  final roundedMinutes = ((totalMinutes + 29) ~/ 30) * 30;
+  // 最晚允许 23:00 开始，避免默认 60 分钟的块跨过午夜。
+  if (roundedMinutes > 23 * 60) return null;
+  return earliestDay.add(Duration(minutes: roundedMinutes));
 }
 
 class TodayPage extends ConsumerStatefulWidget {
@@ -749,6 +772,8 @@ class _UnscheduledTile extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final theme = Theme.of(context);
     final readOnly = ref.watch(todayRepositoryProvider).readOnly;
+    final now = ref.watch(clockProvider).now();
+    final start = nextScheduleStart(now, day);
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(AppSpacing.md),
@@ -767,14 +792,23 @@ class _UnscheduledTile extends ConsumerWidget {
               ),
             ),
             TextButton(
-              onPressed: readOnly
+              onPressed: readOnly || start == null
                   ? null
-                  : () => ref
-                        .read(todayControllerProvider.notifier)
-                        .moveToToday(
-                          item.id,
-                          DateTime(day.year, day.month, day.day, 18),
-                        ),
+                  : () {
+                      final latest = nextScheduleStart(
+                        ref.read(clockProvider).now(),
+                        day,
+                      );
+                      if (latest == null) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(content: Text(S.scheduleTooLate)),
+                        );
+                        return;
+                      }
+                      ref
+                          .read(todayControllerProvider.notifier)
+                          .moveToToday(item.id, latest);
+                    },
               child: const Text(S.planForToday),
             ),
           ],

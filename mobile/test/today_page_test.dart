@@ -274,7 +274,7 @@ void main() {
     expect(find.byType(TimePickerDialog), findsNothing);
   });
 
-  test('时间块改期必须早于结束时间', () {
+  test('时间块改期必须早于结束时间且至少 5 分钟', () {
     final item = TodayItem(
       id: 'block-1',
       kind: TodayItemKind.block,
@@ -292,7 +292,47 @@ void main() {
       isNotNull,
     );
     expect(
+      resolveAdjustedStart(item, const TimeOfDay(hour: 9, minute: 55)),
+      isNotNull,
+    );
+    expect(
+      resolveAdjustedStart(item, const TimeOfDay(hour: 9, minute: 56)),
+      isNull,
+    );
+    expect(
       resolveAdjustedStart(item, const TimeOfDay(hour: 10, minute: 0)),
+      isNull,
+    );
+  });
+
+  test('排期时间避开过去并选择可用时段', () {
+    final day = DateTime(2026, 11, 16);
+
+    expect(
+      nextScheduleStart(DateTime(2026, 11, 16, 9), day),
+      DateTime(2026, 11, 16, 18),
+    );
+    expect(
+      nextScheduleStart(DateTime(2026, 11, 16, 17, 58), day),
+      DateTime(2026, 11, 16, 18, 30),
+    );
+    expect(
+      nextScheduleStart(DateTime(2026, 11, 16, 19, 10), day),
+      DateTime(2026, 11, 16, 19, 30),
+    );
+    expect(
+      nextScheduleStart(DateTime(2026, 11, 16, 22, 50), day),
+      DateTime(2026, 11, 16, 23),
+    );
+    expect(nextScheduleStart(DateTime(2026, 11, 16, 23), day), isNull);
+    expect(nextScheduleStart(DateTime(2026, 11, 16, 23, 40), day), isNull);
+    expect(nextScheduleStart(DateTime(2026, 11, 16, 23, 58), day), isNull);
+    expect(
+      nextScheduleStart(DateTime(2026, 11, 16, 9), DateTime(2026, 11, 17)),
+      DateTime(2026, 11, 17, 18),
+    );
+    expect(
+      nextScheduleStart(DateTime(2026, 11, 16, 9), DateTime(2026, 11, 15)),
       isNull,
     );
   });

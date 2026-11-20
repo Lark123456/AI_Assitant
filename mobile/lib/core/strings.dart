@@ -67,8 +67,9 @@ abstract final class S {
   static const detailSource = '来源';
   static const detailSync = '同步';
   static const detailReason = '理由';
-  static const invalidTime = '新时间需要早于结束时间';
+  static const invalidTime = '新时间需要比结束时间早至少 5 分钟';
   static const timeUpdated = '时间已更新';
+  static const scheduleTooLate = '这个日期已没有可排期的时间';
   static const actionFailed = '操作失败，请稍后重试';
   static const briefAdjustTitle = '调整晨间简报';
   static const briefAdjustLater = '晚一点';

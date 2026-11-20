@@ -114,7 +114,13 @@ $env:SCREENSHOTS="1"
 
 ## 远程 Today（U2）
 
-默认仍是 Mock；用 `--dart-define` 开启真实 Today 数据：
+默认仍是 Mock；用 `--dart-define` 开启真实 Today 数据。后端 `.env` 需先开启移动端 API：
+
+```dotenv
+ENABLE_MOBILE_API=1
+# 非本机部署时建议同时配置，留空 = 不限制
+ALLOWED_OPEN_IDS=
+```
 
 ```powershell
 adb reverse tcp:8000 tcp:8000
@@ -124,11 +130,13 @@ adb reverse tcp:8000 tcp:8000
   --dart-define=BUTLER_USER=<用户 UUID 或飞书 open_id>
 ```
 
-后端接口：`GET /api/mobile/today?date=YYYY-MM-DD`，开发期用户头 `X-Butler-User`。
+后端接口：`GET /api/mobile/today?date=YYYY-MM-DD`，开发期用户头 `X-Butler-User`；配置 `ALLOWED_OPEN_IDS` 后，UUID 与 open_id 都必须是白名单用户。
 写操作：`POST /api/mobile/today/items/{id}/complete|skip|restore|reschedule`、
 `POST /api/mobile/today/tasks/{id}/schedule`、`POST /api/mobile/today/review`。
 写接口必须带 `Idempotency-Key`，重复提交同一键返回上次结果。
-已完成/跳过的提醒会取消触发并保留终态；未勾选的晚间复盘条目保持原状态。
+改期只允许未结束的日程块，新开始时间需在同一天且距结束至少 5 分钟。
+已完成/跳过的提醒会取消触发并保留终态；失败或已取消的提醒不可再操作。
+未勾选的晚间复盘条目保持原状态；失效或不可操作的条目会被跳过，不影响其余条目。
 晨间/晚间简报暂返回空，聊天仍为 Mock。`adb reverse` 需要手机开启 USB 调试；也可以把后端改为局域网地址。
 
 ## 验收状态
