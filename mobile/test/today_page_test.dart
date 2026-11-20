@@ -73,6 +73,20 @@ final class _FakeClock implements Clock {
   DateTime now() => _now;
 }
 
+class _FailingRefreshRepository extends MockTodayRepository {
+  _FailingRefreshRepository({required super.clock})
+    : super(delay: Duration.zero);
+
+  var loads = 0;
+
+  @override
+  Future<DayView> loadDay(DateTime date) async {
+    loads += 1;
+    if (loads > 1) throw StateError('refresh failed');
+    return super.loadDay(date);
+  }
+}
+
 Widget _app({
   MockTodayDataset dataset = MockTodayDataset.normal,
   NetworkStatus network = NetworkStatus.online,
@@ -350,6 +364,22 @@ void main() {
     await tester.pump(const Duration(milliseconds: 500));
     await tester.pumpAndSettle();
     expect(find.text(S.syncing), findsNothing);
+  });
+
+  testWidgets('刷新失败保留原数据并提示', (tester) async {
+    final clock = _FakeClock();
+    final repository = _FailingRefreshRepository(clock: clock);
+    await tester.pumpWidget(_app(repository: repository));
+    await tester.pumpAndSettle();
+    expect(find.text('专注写作'), findsOneWidget);
+
+    await tester.drag(find.byType(ListView), const Offset(0, 400));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 500));
+    await tester.pumpAndSettle();
+
+    expect(find.text(S.refreshFailed), findsOneWidget);
+    expect(find.text('专注写作'), findsOneWidget);
   });
 
   testWidgets('按住语音按钮显示录音面板与假波形', (tester) async {

@@ -60,21 +60,28 @@ class TodayController extends AsyncNotifier<TodayState> {
     await _apply((repository) => repository.restore(itemId, status));
   }
 
-  /// 下拉刷新：模拟一次同步，并重新加载当天数据。
+  /// 下拉刷新：Mock 模式保留模拟同步态；失败时保留旧数据并提示。
   Future<void> refresh() async {
+    final remote = ref.read(remoteConfigProvider).enabled;
     final source = ref.read(mockNetworkStatusSourceProvider);
     final previous = source.current;
-    source.setStatus(NetworkStatus.syncing);
-    await Future<void>.delayed(const Duration(milliseconds: 450));
+    if (!remote) {
+      source.setStatus(NetworkStatus.syncing);
+      await Future<void>.delayed(const Duration(milliseconds: 450));
+    }
     try {
       final day = await ref.read(todayRepositoryProvider).loadDay(_date);
       state = AsyncData(TodayState(date: _date, day: day));
+    } catch (_) {
+      ref.read(todayActionErrorProvider.notifier).show(S.refreshFailed);
     } finally {
-      source.setStatus(
-        previous == NetworkStatus.offline
-            ? NetworkStatus.offline
-            : NetworkStatus.online,
-      );
+      if (!remote) {
+        source.setStatus(
+          previous == NetworkStatus.offline
+              ? NetworkStatus.offline
+              : NetworkStatus.online,
+        );
+      }
     }
   }
 

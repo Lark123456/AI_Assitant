@@ -71,6 +71,7 @@ abstract final class S {
   static const timeUpdated = '时间已更新';
   static const scheduleTooLate = '这个日期已没有可排期的时间';
   static const actionFailed = '操作失败，请稍后重试';
+  static const refreshFailed = '刷新失败，请稍后重试';
   static const briefAdjustTitle = '调整晨间简报';
   static const briefAdjustLater = '晚一点';
   static const briefAdjustShorter = '精简一点';
