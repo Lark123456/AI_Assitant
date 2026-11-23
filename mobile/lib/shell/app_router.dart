@@ -1,11 +1,10 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
-import '../core/strings.dart';
 import '../features/chat/chat_page.dart';
+import '../features/profile/profile_page.dart';
 import '../features/tasks/tasks_page.dart';
 import '../features/today/today_page.dart';
-import 'placeholder_page.dart';
 import 'shell_scaffold.dart';
 
 /// 路由与 4 Tab 外壳；页面内容在后续批次替换占位页。
@@ -50,10 +49,7 @@ GoRouter createAppRouter() => GoRouter(
           routes: [
             GoRoute(
               path: '/profile',
-              builder: (context, state) => const PlaceholderPage(
-                title: S.tabProfile,
-                body: S.profileNextStage,
-              ),
+              builder: (context, state) => const ProfilePage(),
             ),
           ],
         ),

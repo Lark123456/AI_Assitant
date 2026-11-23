@@ -3,10 +3,12 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:mobile/core/providers.dart';
 import 'package:mobile/core/remote_config.dart';
 import 'package:mobile/data/mock/mock_chat_repository.dart';
+import 'package:mobile/data/mock/mock_profile_repository.dart';
 import 'package:mobile/data/mock/mock_task_repository.dart';
 import 'package:mobile/data/mock/mock_today_repository.dart';
 import 'package:mobile/data/remote/api_client.dart';
 import 'package:mobile/data/remote/remote_chat_repository.dart';
+import 'package:mobile/data/remote/remote_profile_repository.dart';
 import 'package:mobile/data/remote/remote_task_repository.dart';
 import 'package:mobile/data/remote/remote_today_repository.dart';
 import 'package:mobile/domain/enums.dart';
@@ -30,6 +32,10 @@ void main() {
 
     expect(container.read(chatRepositoryProvider), isA<MockChatRepository>());
     expect(container.read(taskRepositoryProvider), isA<MockTaskRepository>());
+    expect(
+      container.read(profileRepositoryProvider),
+      isA<MockProfileRepository>(),
+    );
     final today = container.read(todayRepositoryProvider);
     expect(today, isA<MockTodayRepository>());
     expect(today.readOnly, isFalse);
@@ -55,6 +61,10 @@ void main() {
     expect(today.readOnly, isFalse);
     expect(container.read(chatRepositoryProvider), isA<RemoteChatRepository>());
     expect(container.read(taskRepositoryProvider), isA<RemoteTaskRepository>());
+    expect(
+      container.read(profileRepositoryProvider),
+      isA<RemoteProfileRepository>(),
+    );
   });
 
   test('网络状态源可切换并广播', () async {

@@ -14,6 +14,19 @@ abstract final class S {
   static const taskFilterAll = '全部';
   static const taskUpcoming = '下一个安排';
 
+  static const profileSubtitle = '资料与数据源';
+  static const profileAccount = '账号';
+  static const profileName = '昵称';
+  static const profileTimezone = '时区';
+  static const profileDayStart = '日界线';
+  static const profileDataSource = '数据源';
+  static const profileRemote = '远程后端';
+  static const profileMock = '本地 Mock';
+  static const profileApiBase = '接口地址';
+  static const profileAbout = '关于';
+  static const profileVersion = '版本';
+  static const profileDebug = '调试面板';
+
   static const greetingDawn = '夜深了';
   static const greetingMorning = '早上好';
   static const greetingNoon = '中午好';
@@ -46,9 +59,6 @@ abstract final class S {
   static const overdue = '已逾期';
   static const waitingSync = '待同步';
   static const readOnlyMode = '只读模式：真实数据已接入，修改操作将在下一批开放';
-
-  static const placeholderBody = '这一页将在后续批次实现';
-  static const profileNextStage = '我的页将在下一阶段提供';
 
   static const markDone = '完成';
   static const skipItem = '跳过';

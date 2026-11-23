@@ -4,6 +4,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:intl/date_symbol_data_local.dart';
 import 'package:mobile/core/strings.dart';
 import 'package:mobile/features/chat/chat_page.dart';
+import 'package:mobile/features/profile/profile_page.dart';
 import 'package:mobile/features/tasks/tasks_page.dart';
 import 'package:mobile/features/today/today_page.dart';
 import 'package:mobile/main.dart';
@@ -46,7 +47,7 @@ void main() {
 
     await tester.tap(_tab(S.tabProfile));
     await tester.pumpAndSettle();
-    expect(find.text(S.profileNextStage), findsOneWidget);
+    expect(find.byType(ProfilePage), findsOneWidget);
   });
 
   testWidgets('切回今日 Tab 仍显示今日页', (tester) async {

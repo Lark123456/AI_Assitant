@@ -172,9 +172,16 @@ adb reverse tcp:8000 tcp:8000
 - 任务页支持未完成/已完成/全部过滤、下拉刷新、完成/跳过/撤销与“排进今天”；不提供创建/编辑。
 - 默认仍为 Mock；`USE_REMOTE=true` 时走真实接口。
 
+## 我的页（U2）
+
+- `GET /api/mobile/profile`：返回当前用户 `displayName`、`timezone`、`dayStart("HH:MM")`、`createdAt`；只读，无写接口。
+- 页面展示账号资料、数据源（Mock/Remote 与接口地址）、版本号（`APP_VERSION`，默认 `0.1.0+1`）与调试入口（仅 debug）。
+- `dayStart` 仅作资料展示；Today 当前按本地零点切日。
+- 默认仍为 Mock；`USE_REMOTE=true` 时走真实接口。
+
 ## 验收状态
 
-- `analyze` / `format` / `test` / `build apk --debug`：通过（130 项测试；3 项截图生成测试默认跳过）
+- `analyze` / `format` / `test` / `build apk --debug`：通过（135 项测试；3 项截图生成测试默认跳过）
 - APK SDK：`sdkVersion 26`、`targetSdkVersion 36`
 - 应用名：`Butler`（Android label；包名仍为 `com.butler.mobile`）
 - 最新 Debug APK：`build/app/outputs/flutter-apk/app-debug.apk`
