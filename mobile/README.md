@@ -155,7 +155,14 @@ adb reverse tcp:8000 tcp:8000
 - 服务端已确认 `failed` 的消息不会原地重跑，重试会生成新的 `clientMessageId`。
 - `processing` 的入站消息由单条状态接口补偿，不会一直停在“Friday 正在处理”。
 - App 进入后台或切离 Chat Tab 时停止轮询；回前台/回到 Chat 时由 `setActive(true)` 立即刷新。
-- Remote 模式暂不支持卡片应答与流式回复；卡片仅在 Mock 模式可用。
+- Remote 已支持 SSE 流式回复（失败静默回退轮询）；卡片应答仍仅 Mock 模式可用。
+
+### SSE 流式
+
+- `GET /api/mobile/chat/messages/{id}/stream`：`event: delta` 为本次模型调用的累计文本（客户端按覆盖渲染），`event: done` 携带最终持久化回复与 outbound 事件 id，`event: error` 表示失败或流不可用。
+- 晚订阅会先收到当前文本快照或终态；处理完成后 broker 无状态时由服务端从数据库回复兜底。
+- SSE 失败或返回 `stream_unavailable` 时，客户端移除流式气泡并回退现有轮询，不弹额外错误。
+- 流式 broker 只在单进程内有效；多 worker/副本时流式不可用，但轮询仍可用。
 
 开发期边界：
 
@@ -188,7 +195,7 @@ adb reverse tcp:8000 tcp:8000
 
 ## 验收状态
 
-- `analyze` / `format` / `test` / `build apk --debug`：通过（140 项测试；3 项截图生成测试默认跳过）
+- `analyze` / `format` / `test` / `build apk --debug`：通过（144 项测试；3 项截图生成测试默认跳过）
 - APK SDK：`sdkVersion 26`、`targetSdkVersion 36`
 - 应用名：`Butler`（Android label；包名仍为 `com.butler.mobile`）
 - 最新 Debug APK：`build/app/outputs/flutter-apk/app-debug.apk`

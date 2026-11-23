@@ -35,6 +35,7 @@ class RemoteChatRepository implements ChatRepository {
   final _syncErrors = StreamController<String?>.broadcast();
   final List<ChatMessage> _messages = [];
   final Set<String> _pendingInboundIds = {};
+  final Map<String, StreamSubscription<SseEvent>> _streamSubs = {};
 
   Timer? _pollTimer;
   var _active = false;
@@ -67,6 +68,7 @@ class RemoteChatRepository implements ChatRepository {
     if (!active) {
       _pollTimer?.cancel();
       _pollTimer = null;
+      _cancelStreams();
       return;
     }
     await _ensureLoaded();
@@ -113,6 +115,7 @@ class RemoteChatRepository implements ChatRepository {
       );
       if (serverId is String && statusText == 'processing') {
         _pendingInboundIds.add(serverId);
+        _startStream(serverId);
       }
       _emitIfChanged();
     } catch (_) {
@@ -199,6 +202,10 @@ class RemoteChatRepository implements ChatRepository {
 
   void _merge(List<TextMessage> incoming) {
     for (final remote in incoming) {
+      if (remote.sender == ChatSender.friday && remote.replyToId != null) {
+        // 服务端最终回复到达后移除同一条入站的流式占位气泡。
+        _removeById('stream-${remote.replyToId}');
+      }
       var index = -1;
       final clientId = remote.clientMessageId;
       if (remote.sender == ChatSender.user && clientId != null) {
@@ -281,6 +288,117 @@ class RemoteChatRepository implements ChatRepository {
       clientMessageId: _stringOrNull(raw['clientMessageId']),
       replyToId: _stringOrNull(raw['replyToId']),
     );
+  }
+
+  void _startStream(String inboundId) {
+    final sse = client is SseClient ? client as SseClient : null;
+    if (sse == null) return;
+    _cancelStream(inboundId);
+    // 订阅保存在 _streamSubs，由 _cancelStream/dispose 统一取消。
+    // ignore: cancel_subscriptions
+    final subscription = sse
+        .getSse(
+          '/api/mobile/chat/messages/${Uri.encodeComponent(inboundId)}/stream',
+        )
+        .listen(
+          (event) {
+            switch (event.event) {
+              case 'delta':
+                _upsertStreamSnapshot(inboundId, event.data['text']);
+              case 'done':
+                _finalizeStream(inboundId, event.data);
+              case 'error':
+                _abandonStream(inboundId);
+            }
+          },
+          onError: (Object error, StackTrace stack) =>
+              _abandonStream(inboundId),
+          cancelOnError: true,
+        );
+    _streamSubs[inboundId] = subscription;
+  }
+
+  void _upsertStreamSnapshot(String inboundId, Object? rawText) {
+    if (rawText is! String) return;
+    final streamId = 'stream-$inboundId';
+    final index = _messages.indexWhere((message) => message.id == streamId);
+    final existing = index >= 0 ? _messages[index] as TextMessage : null;
+    final message = TextMessage(
+      id: streamId,
+      sender: ChatSender.friday,
+      createdAt: existing?.createdAt ?? clock.now(),
+      text: rawText,
+      streaming: true,
+      syncState: SyncState.pending,
+      replyToId: inboundId,
+    );
+    if (index >= 0) {
+      _messages[index] = message;
+    } else {
+      _messages.add(message);
+    }
+    _emitIfChanged();
+  }
+
+  void _finalizeStream(String inboundId, Map<String, dynamic> data) {
+    _cancelStream(inboundId);
+    _pendingInboundIds.remove(inboundId);
+    final messageId = data['messageId'];
+    final text = data['text'];
+    if (messageId is String && messageId.isNotEmpty) {
+      final message = TextMessage(
+        id: messageId,
+        sender: ChatSender.friday,
+        createdAt: _parseStreamTime(data['createdAt']),
+        text: text is String ? text : '',
+        syncState: SyncState.synced,
+        serverId: messageId,
+        replyToId: inboundId,
+      );
+      final index = _messages.indexWhere(
+        (existing) => existing is TextMessage && existing.serverId == messageId,
+      );
+      if (index >= 0) {
+        _messages[index] = message;
+      } else {
+        _messages.add(message);
+      }
+      _messages.sort(_compare);
+    }
+    _emitIfChanged();
+  }
+
+  void _abandonStream(String inboundId) {
+    _cancelStream(inboundId);
+    _emitIfChanged();
+  }
+
+  void _cancelStream(String inboundId) {
+    final subscription = _streamSubs.remove(inboundId);
+    if (subscription != null) unawaited(subscription.cancel());
+    _removeById('stream-$inboundId');
+  }
+
+  void _cancelStreams() {
+    for (final inboundId in _streamSubs.keys.toList()) {
+      _cancelStream(inboundId);
+    }
+    _streamSubs.clear();
+    _emitIfChanged();
+  }
+
+  bool _removeById(String id) {
+    final before = _messages.length;
+    _messages.removeWhere((message) => message.id == id);
+    return _messages.length != before;
+  }
+
+  DateTime _parseStreamTime(Object? raw) {
+    if (raw is String) {
+      final parsed = DateTime.tryParse(raw);
+      if (parsed != null) return parsed.toLocal();
+    }
+    return clock.now();
   }
 
   void _applyServerStatus(String serverId, SyncState syncState) {
@@ -367,6 +485,7 @@ class RemoteChatRepository implements ChatRepository {
   }
 
   void dispose() {
+    _cancelStreams();
     _pollTimer?.cancel();
     _pollTimer = null;
     _controller.close();

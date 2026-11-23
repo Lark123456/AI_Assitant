@@ -2,6 +2,16 @@
 
 ## 变更记录
 
+### 变更（U2-B Mobile U2 剩余）
+1. 新增 `GET /api/mobile/tasks`：只读任务列表（open/done/all），附带最早的未来计划块；写操作复用 Today 端点，不新增任务写接口。
+2. 新增 `GET /api/mobile/profile`：只读用户资料（displayName、timezone、dayStart、createdAt）。
+3. 新增 `GET /api/mobile/reminders/due`：返回最近时间窗内已到点、未过期的 reminder，供 App 前台应用内提醒；不做 OS 通知或远程推送。
+4. 新增 `GET /api/mobile/chat/messages/{id}/stream`（SSE）：`delta` 为本次模型调用的累计文本，`done` 携带最终持久化回复与 outbound 事件 id，`error` 表示失败/不可用；晚订阅先收到快照；处理完成后可从 broker 或数据库兜底返回。
+5. 流式实现为进程内 `ChatStreamBroker`：与 per-user 串行锁一样只支持单进程 API；多 worker/副本时订阅可能返回 `stream_unavailable`，客户端回退轮询。
+6. 工具调用场景允许先输出前导文本；`done` 以最终持久化回复覆盖，保证 UI 与 event_log 一致。
+7. `MobileAdapter` 的 `Capabilities.streaming` 改为 true，表示手机端支持 SSE 拉流，不支持主动推送。
+8. Flutter 新增 `SseClient` 接口（与 `ApiClient` 分离）；RemoteChatRepository 用流式气泡展示 delta，done 后落为正式消息，与轮询按 serverId/replyToId 去重，SSE 失败静默回退轮询。
+
 ### 变更（U2-A 手机聊天）
 1. 手机入口复用已认证 User：新增 `InboundPipeline.ingest_for_user(event, user, client_message_id)`；不调用 `get_or_create_user`，不创建 `channel=mobile` 的 channel_identity；白名单由 Mobile API 的 `get_mobile_user` 完成。
 2. 新增 `MobileAdapter`：channel=mobile，start no-op，send 只返回 ok，不写 event_log；能力声明为不支持主动推送、流式与按钮。它只用于 adapter 注册、recovery 渠道过滤与能力声明，正常手机路径不调用 send。
@@ -162,6 +172,40 @@ Capabilities：can_push_unsolicited、push_credits、can_update_message、suppor
 入站处理顺序：验签 → 白名单（ALLOWED_OPEN_IDS，仅飞书）→ 去重（idempotency_key）→ 写 event_log → 快速应答 → 异步处理【变更（阶段 1 修订）：拆为 pipeline.ingest（同步，回调最多等待 3 秒）与 pipeline.process（异步）】
 入站幂等键（【变更（阶段 1 修订）】）：飞书优先使用事件 event_id，缺失时退回 message_id；其他渠道沿用渠道侧事件标识
 【变更（U2-A）】MobileAdapter：channel=mobile；start no-op；send(intent) 返回 ok 但不发送、不写 event_log；Capabilities(can_push_unsolicited=false, streaming=false, supports_buttons=false)。手机正常回复由 Pipeline 写入 event_log，不调用 send。
+【变更（U2-B）】MobileAdapter 的 `streaming` 改为 true：手机端通过 SSE 拉流；send 仍为 no-op，不支持主动推送。
+
+### Mobile Tasks / Profile / Reminders API（U2-B）
+
+开发期认证同 Mobile Chat：`X-Butler-User` + `ENABLE_MOBILE_API=1` + `ALLOWED_OPEN_IDS`；仅本机或 `adb reverse`。
+
+`GET /api/mobile/tasks?status=open|done|all&limit=100`
+
+- 只读当前用户 `type=item` 的任务；`open→active`、`done→done`、`all→active/done/dropped`。
+- 状态映射 `active→open`、`done→done`、`dropped→skipped`；`upcomingBlock` 取最早的未来 `planned` 块。
+- 写操作复用 Today 的 complete/skip/restore/schedule 端点。
+
+`GET /api/mobile/profile`
+
+- 返回 `{displayName, timezone, dayStart("HH:MM"), createdAt}`；只读。
+
+`GET /api/mobile/reminders/due?graceMinutes=30&limit=20`
+
+- 返回 `fire_at` 在 `[now-graceMinutes, now]`、未过期、状态为 pending/claimed/fired 的 reminder。
+- 仅用于 App 前台应用内提醒；不创建系统通知、不申请通知权限、不做远程推送。
+
+### Mobile Chat SSE（U2-B）
+
+`GET /api/mobile/chat/messages/{id}/stream`
+
+- 校验事件归属当前用户、`channel='mobile'`、`type='message'`、`direction='inbound'`，否则 404。
+- 事件格式：
+  - `event: delta`，`data: {"text": "<本次模型调用的累计文本>"}`；客户端按覆盖渲染。
+  - `event: done`，`data: {"text", "messageId", "replyToId", "createdAt"}`；`messageId` 为 outbound event id。
+  - `event: error`，`data: {"code": "processing_failed" | "stream_unavailable"}`。
+  - 空闲时发送 `: ping` 注释，客户端忽略。
+- 晚订阅：先收到当前文本快照或终态；处理完成后 broker 无状态时从数据库查 outbound 回复兜底。
+- `processing` 但 broker 无状态（进程重启/多进程）返回 `stream_unavailable`，客户端回退现有轮询。
+- 单进程约束：broker 不跨进程；多 worker/副本时流式不可用但轮询仍可用。
 
 ### Mobile Chat API（U2-A）
 

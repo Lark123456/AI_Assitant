@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -12,6 +13,19 @@ abstract interface class ApiClient {
   });
 }
 
+/// 一条 SSE 事件；data 为 JSON 对象。
+class SseEvent {
+  const SseEvent(this.event, this.data);
+
+  final String event;
+  final Map<String, dynamic> data;
+}
+
+/// SSE 客户端单独成接口，避免给所有 ApiClient Fake 增加方法。
+abstract interface class SseClient {
+  Stream<SseEvent> getSse(String path);
+}
+
 class ApiException implements Exception {
   const ApiException(this.message);
 
@@ -21,7 +35,7 @@ class ApiException implements Exception {
   String toString() => 'ApiException: $message';
 }
 
-class HttpApiClient implements ApiClient {
+class HttpApiClient implements ApiClient, SseClient {
   HttpApiClient({
     required this.baseUrl,
     required this.user,
@@ -46,6 +60,48 @@ class HttpApiClient implements ApiClient {
           .join()
           .timeout(timeout);
       return _decode(response.statusCode, body);
+    } finally {
+      client.close(force: true);
+    }
+  }
+
+  @override
+  Stream<SseEvent> getSse(String path) async* {
+    final client = HttpClient();
+    try {
+      final request = await client
+          .getUrl(Uri.parse('$baseUrl$path'))
+          .timeout(timeout);
+      request.headers.set('X-Butler-User', user);
+      request.headers.set('Accept', 'text/event-stream');
+      final response = await request.close().timeout(timeout);
+      if (response.statusCode < 200 || response.statusCode >= 300) {
+        final body = await response
+            .transform(utf8.decoder)
+            .join()
+            .timeout(timeout);
+        throw ApiException('HTTP ${response.statusCode}: $body');
+      }
+      var eventName = 'message';
+      final dataLines = <String>[];
+      await for (final line
+          in response.transform(utf8.decoder).transform(const LineSplitter())) {
+        if (line.isEmpty) {
+          final event = _decodeSseEvent(eventName, dataLines);
+          eventName = 'message';
+          dataLines.clear();
+          if (event != null) yield event;
+          continue;
+        }
+        if (line.startsWith(':')) continue;
+        if (line.startsWith('event:')) {
+          eventName = line.substring(6).trim();
+        } else if (line.startsWith('data:')) {
+          dataLines.add(line.substring(5).trimLeft());
+        }
+      }
+      final trailing = _decodeSseEvent(eventName, dataLines);
+      if (trailing != null) yield trailing;
     } finally {
       client.close(force: true);
     }
@@ -90,4 +146,13 @@ class HttpApiClient implements ApiClient {
     }
     return parsed;
   }
+}
+
+SseEvent? _decodeSseEvent(String event, List<String> dataLines) {
+  if (dataLines.isEmpty) return null;
+  final parsed = jsonDecode(dataLines.join('\n'));
+  if (parsed is! Map<String, dynamic>) {
+    throw const ApiException('SSE 数据不是 JSON 对象');
+  }
+  return SseEvent(event, parsed);
 }

@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mobile/core/clock.dart';
 import 'package:mobile/core/strings.dart';
@@ -45,6 +47,41 @@ class _FakeApiClient implements ApiClient {
     postKeys.add(idempotencyKey);
     postBodies.add(body);
     return onPost(path, body, idempotencyKey);
+  }
+}
+
+class _StreamingApiClient implements ApiClient, SseClient {
+  _StreamingApiClient({
+    required this.getJsonHandler,
+    required this.postHandler,
+  });
+
+  final Future<Map<String, dynamic>> Function(String path) getJsonHandler;
+  final Future<Map<String, dynamic>> Function(
+    String path,
+    Map<String, dynamic> body,
+    String idempotencyKey,
+  )
+  postHandler;
+  // 测试结束时通过 addTearDown 关闭。
+  // ignore: close_sinks
+  final controller = StreamController<SseEvent>.broadcast();
+  final List<String> ssePaths = [];
+
+  @override
+  Future<Map<String, dynamic>> getJson(String path) => getJsonHandler(path);
+
+  @override
+  Future<Map<String, dynamic>> postJson(
+    String path,
+    Map<String, dynamic> body, {
+    required String idempotencyKey,
+  }) => postHandler(path, body, idempotencyKey);
+
+  @override
+  Stream<SseEvent> getSse(String path) {
+    ssePaths.add(path);
+    return controller.stream;
   }
 }
 
@@ -344,5 +381,143 @@ void main() {
     await Future<void>.delayed(const Duration(milliseconds: 70));
 
     expect(calls, callsAfterStop);
+  });
+
+  test('SSE 增量覆盖同一气泡并在 done 后落为正式消息', () async {
+    var historyCalls = 0;
+    final client = _StreamingApiClient(
+      getJsonHandler: (path) async {
+        if (path.contains('/messages/s1')) {
+          return _message(id: 's1', text: '你好', status: 'done');
+        }
+        historyCalls += 1;
+        if (historyCalls == 1) return _page([], nextCursor: null);
+        return _page([
+          _message(
+            id: 'r1',
+            role: 'friday',
+            text: '你好',
+            status: 'available',
+            replyToId: 's1',
+            createdAt: '2026-11-23T09:00:01+08:00',
+          ),
+        ], nextCursor: 'r1');
+      },
+      postHandler: (path, body, key) async => {
+        'id': 's1',
+        'status': 'processing',
+      },
+    );
+    final repository = _repository(client);
+    addTearDown(repository.dispose);
+    addTearDown(() => client.controller.close());
+    await repository.watchMessages().first;
+
+    await repository.sendText('你好');
+    expect(client.ssePaths.single, '/api/mobile/chat/messages/s1/stream');
+
+    client.controller.add(const SseEvent('delta', {'text': '你'}));
+    await Future<void>.delayed(Duration.zero);
+    var snapshot = await repository.watchMessages().first;
+    var friday = snapshot
+        .whereType<TextMessage>()
+        .where((message) => message.sender == ChatSender.friday)
+        .toList();
+    expect(friday.single.text, '你');
+    expect(friday.single.streaming, isTrue);
+
+    client.controller.add(const SseEvent('delta', {'text': '你好'}));
+    await Future<void>.delayed(Duration.zero);
+    snapshot = await repository.watchMessages().first;
+    friday = snapshot
+        .whereType<TextMessage>()
+        .where((message) => message.sender == ChatSender.friday)
+        .toList();
+    expect(friday.single.text, '你好');
+
+    client.controller.add(
+      const SseEvent('done', {
+        'text': '你好',
+        'messageId': 'r1',
+        'replyToId': 's1',
+        'createdAt': '2026-11-23T09:00:01+08:00',
+      }),
+    );
+    await Future<void>.delayed(Duration.zero);
+    snapshot = await repository.watchMessages().first;
+    friday = snapshot
+        .whereType<TextMessage>()
+        .where((message) => message.sender == ChatSender.friday)
+        .toList();
+    expect(friday.length, 1);
+    expect(friday.single.serverId, 'r1');
+    expect(friday.single.streaming, isFalse);
+    expect(friday.single.syncState, SyncState.synced);
+
+    // 轮询拿到同一条 outbound 时不重复
+    await repository.setActive(true);
+    snapshot = await repository.watchMessages().first;
+    friday = snapshot
+        .whereType<TextMessage>()
+        .where((message) => message.sender == ChatSender.friday)
+        .toList();
+    expect(friday.length, 1);
+    expect(friday.single.serverId, 'r1');
+    await repository.setActive(false);
+  });
+
+  test('SSE 错误移除占位气泡并回退轮询', () async {
+    var historyCalls = 0;
+    final client = _StreamingApiClient(
+      getJsonHandler: (path) async {
+        if (path.contains('/messages/s1')) {
+          return _message(id: 's1', text: '你好', status: 'done');
+        }
+        historyCalls += 1;
+        if (historyCalls == 1) return _page([], nextCursor: null);
+        return _page([
+          _message(
+            id: 'r1',
+            role: 'friday',
+            text: '轮询回复',
+            status: 'available',
+            replyToId: 's1',
+            createdAt: '2026-11-23T09:00:01+08:00',
+          ),
+        ], nextCursor: 'r1');
+      },
+      postHandler: (path, body, key) async => {
+        'id': 's1',
+        'status': 'processing',
+      },
+    );
+    final repository = _repository(client);
+    addTearDown(repository.dispose);
+    addTearDown(() => client.controller.close());
+    await repository.watchMessages().first;
+
+    await repository.sendText('你好');
+    client.controller.add(
+      const SseEvent('error', {'code': 'stream_unavailable'}),
+    );
+    await Future<void>.delayed(Duration.zero);
+    var snapshot = await repository.watchMessages().first;
+    expect(
+      snapshot.whereType<TextMessage>().where(
+        (message) => message.sender == ChatSender.friday,
+      ),
+      isEmpty,
+    );
+
+    await repository.setActive(true);
+    snapshot = await repository.watchMessages().first;
+    final friday = snapshot
+        .whereType<TextMessage>()
+        .where((message) => message.sender == ChatSender.friday)
+        .toList();
+    expect(friday.length, 1);
+    expect(friday.single.serverId, 'r1');
+    expect(friday.single.text, '轮询回复');
+    await repository.setActive(false);
   });
 }
