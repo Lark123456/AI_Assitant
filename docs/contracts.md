@@ -2,6 +2,18 @@
 
 ## 变更记录
 
+### 变更（U2-A 手机聊天）
+1. 手机入口复用已认证 User：新增 `InboundPipeline.ingest_for_user(event, user, client_message_id)`；不调用 `get_or_create_user`，不创建 `channel=mobile` 的 channel_identity；白名单由 Mobile API 的 `get_mobile_user` 完成。
+2. 新增 `MobileAdapter`：channel=mobile，start no-op，send 只返回 ok，不写 event_log；能力声明为不支持主动推送、流式与按钮。它只用于 adapter 注册、recovery 渠道过滤与能力声明，正常手机路径不调用 send。
+3. 手机安全完成路径：`FridayAgent.handle` 返回后，在同一事务写 outbound 与 `inbound_processing(done)`，随后直接返回，跳过 `MobileAdapter.send` 与 outbound 事务 B；Agent 异常时回滚半途写入，再写兜底回复并置 done。
+4. 手机 outbound payload：`{text, delivery: "persisted", reply_to_event_id, client_message_id}`；不使用 `send_ok`；幂等键 `mobile-reply:{inbound_event_id}`，同一入站事件至多一条回复。
+5. 手机入站 payload：在通用 payload 基础上带 `client_message_id`；入站幂等键 `mobile-chat:{user_id}:{clientMessageId}`，同一用户同一 clientMessageId 只产生一条入站事件。
+6. 渠道隔离：`build_history` 增加 channel 参数，短期上下文只取同一渠道；长期记忆检索不按渠道过滤。
+7. Mobile Chat API（见「接口 / Mobile Chat API」）：POST 发送、GET 历史、GET 单条状态；首屏取最新 N 条再升序返回；手机出站状态为 `available`，不使用 `sent`。
+8. 同一用户的消息处理在 API 进程内用 `asyncio.Lock` 串行；U2-A 只支持单进程 API，多 worker/多副本需跨进程协调。
+9. 恢复：`recover_unfinished()` 只处理本服务注册了 adapter 的渠道；只有注册 mobile adapter 的 API 服务接手手机 processing 事件，Feishu 服务跳过。
+10. 新增工具：`update_task`、`update_reminder`、`list_notes`；`reschedule_block` 的终态/跨天/最短 5 分钟校验与 Today 改期接口一致，过去时间策略为“允许修正当天已逾期块”。
+
 ### 变更（阶段 3 修复 F：记忆读取注入）
 1. Friday 每轮处理用户消息时检索长期记忆并注入 system 提示：只取 status=active；pending / superseded / retracted 不参与。
 2. 向量检索只比较 embedding_model 与当前嵌入模型一致的记忆（不同模型的向量不混合比较）；结构化槽位不依赖向量，始终可用。
@@ -95,14 +107,17 @@ id、display_name、timezone（IANA，如 Asia/Tokyo）、day_start（time，默
 
 ### channel_identity（阶段 1）
 id、user_id、channel（feishu | console）、external_id、tenant_id（可空）；唯一约束 (channel, external_id)
+【变更（U2-A）】手机聊天不写入 channel=mobile：手机 API 通过开发期用户头解析已有 User 后调用 `ingest_for_user`，CHECK 约束保持不变。
 
 ### event_log（阶段 1，append-only）
 id、user_id、channel、direction（inbound | outbound | system | tool）、type（message | callback | tool_call | tool_result | trigger | delivery 等）、payload（jsonb）、idempotency_key（可空，唯一）、trace_id、occurred_at、recorded_at
 约束：数据库层面禁止 UPDATE 与 DELETE（触发器或权限）；索引 (user_id, occurred_at)
+【变更（U2-A）】手机消息 channel=mobile：入站 payload 额外带 `client_message_id`；手机出站 payload 为 `{text, delivery: "persisted", reply_to_event_id, client_message_id}`，不写 `send_ok`。
 
 ### inbound_processing（阶段 1 修订 2）
 event_id（主键，FK event_log.id）、user_id、status（processing | done | failed）、error（可空）、updated_at
 说明：event_log 只追加，入站事件的处理状态放此独立表；ingest 与入站事件同事务写入 processing，process 结束置 done/failed；服务启动时补处理仍为 processing 的事件（工具幂等键保证重放安全）
+【变更（U2-A）】启动补处理按服务已注册的 adapter 过滤渠道：手机事件只由注册 mobile adapter 的 API 服务接手，Feishu 服务跳过。
 
 ### work_item（阶段 1）
 id、user_id、type（seed | item | project | mission）、status（seed | clarifying | active | dormant | done | dropped）、title、description、parent_id、mission_id、clarity_score、size_estimate_min、revisit_trigger（jsonb）、source_event_id、rev
@@ -146,6 +161,36 @@ Capabilities：can_push_unsolicited、push_credits、can_update_message、suppor
 - update(provider_msg_id, intent) -> DeliveryResult（仅当 can_update_message）
 入站处理顺序：验签 → 白名单（ALLOWED_OPEN_IDS，仅飞书）→ 去重（idempotency_key）→ 写 event_log → 快速应答 → 异步处理【变更（阶段 1 修订）：拆为 pipeline.ingest（同步，回调最多等待 3 秒）与 pipeline.process（异步）】
 入站幂等键（【变更（阶段 1 修订）】）：飞书优先使用事件 event_id，缺失时退回 message_id；其他渠道沿用渠道侧事件标识
+【变更（U2-A）】MobileAdapter：channel=mobile；start no-op；send(intent) 返回 ok 但不发送、不写 event_log；Capabilities(can_push_unsolicited=false, streaming=false, supports_buttons=false)。手机正常回复由 Pipeline 写入 event_log，不调用 send。
+
+### Mobile Chat API（U2-A）
+
+开发期认证：`X-Butler-User`（用户 UUID 或渠道外部 id）+ `ENABLE_MOBILE_API=1` + `ALLOWED_OPEN_IDS`。这不是真实认证，只允许本机或 `adb reverse` 调试，不能暴露到局域网或公网；`ALLOWED_OPEN_IDS` 不能替代认证。
+
+`POST /api/mobile/chat/messages`
+
+- body：`{clientMessageId(1–200), text(1–4000)}`。
+- 幂等：服务端键 `mobile-chat:{user_id}:{clientMessageId}`；同用户同 key 返回既有事件，不再次处理。
+- `Idempotency-Key` 头可选；若出现必须与 `clientMessageId` 完全一致，否则 400。
+- 新消息返回 202：`{id, clientMessageId, status: "processing", createdAt, duplicate: false}`；重复请求返回 200、当前状态与 `duplicate: true`。
+- 落库后异步处理；同一用户的消息在 API 进程内串行。
+
+`GET /api/mobile/chat/messages?limit=50&after=<event_id>&before=<event_id>`
+
+- 只返回 `user_id=当前用户 AND channel='mobile' AND type='message' AND direction IN ('inbound','outbound')`。
+- 首屏（无游标）：先按 `occurred_at DESC, id DESC` 取最新 `limit` 条，再反转为升序返回；`limit` 1–100，默认 50。
+- `after` 取游标之后的增量；`before` 取游标之前的更早历史；二者不能同时使用。游标必须是同一用户的手机聊天事件，否则 400。
+- `messages` 始终按 `occurred_at ASC, id ASC`；响应含 `nextCursor`、`previousCursor`、`hasMore`。
+
+`GET /api/mobile/chat/messages/{id}`
+
+- 校验事件归属当前用户且 `channel='mobile'`、`type='message'`，否则 404；用于 `processing → done/failed` 的状态补偿。
+
+消息结构：`{id, clientMessageId, role: user | friday, text, status, replyToId, createdAt}`。
+
+- 入站 `status`：`processing | done | failed`；没有 `inbound_processing` 行时按 `failed` 返回并记录告警。
+- 手机出站 `status`：`available`（已落库、App 可取），不使用 `sent`；`replyToId` 为对应入站事件 id。
+- 不返回 `tool_call`、`tool_result`、`note`、`memory_context`、`delivery`、`trigger` 等事件。
 
 ### LLM 网关
 - aliases.yaml：别名 -> provider、model、params（reasoning_effort、max_tokens、timeout、temperature）、fallback 别名；【变更（阶段 2）】新增 brief_compose（仅写简报开场语，max_tokens=120、temperature=0.7、timeout=3）；【变更（阶段 3a）】新增 memory_resolve（temperature 0、max_tokens 512、timeout 30），memory_extract max_tokens 提到 2048
@@ -161,13 +206,18 @@ Capabilities：can_push_unsolicited、push_credits、can_update_message、suppor
 - 配置项：EMBEDDING_BASE_URL、EMBEDDING_MODEL、EMBEDDING_DIM=1024；阶段 3a 另增加 MEMORY_IDLE_MINUTES、MEMORY_BATCH_MAX_EVENTS、MEMORY_NEIGHBOR_THRESHOLD、MEMORY_NEIGHBOR_TOPK
 - 返回前先截断到 EMBEDDING_DIM，再做 L2 归一化
 
-### Friday 工具（阶段 1；【变更（阶段 1 修订）】幂等键派生方式变更并新增 set_timezone；【变更（阶段 2）】新增时段与偏好工具；【变更（阶段 3a）】新增 remember）
+### Friday 工具（阶段 1；【变更（阶段 1 修订）】幂等键派生方式变更并新增 set_timezone；【变更（阶段 2）】新增时段与偏好工具；【变更（阶段 3a）】新增 remember；【变更（U2-A）】新增 update_task / update_reminder / list_notes）
 create_task、list_tasks、complete_task、set_reminder、capture_note、set_timezone
 【变更（阶段 2）】schedule_block、list_schedule、update_block_status、reschedule_block、set_notif_prefs、list_reminders、cancel_reminder
 【变更（阶段 3a）】remember（type 允许 slot | preference | episode，state_signal 只能异步抽取；槽位冲突返回 pending_confirmation 并附旧值；证据绑定当前入站事件）
+【变更（U2-A）】update_task、update_reminder、list_notes
 - 参数用 Pydantic 定义；时间参数必须是带时区偏移的 ISO 8601
-- 写工具（create_task、complete_task、set_reminder、capture_note、set_timezone）不接受 LLM 提供的幂等键：由代码按入站事件派生，tool_call / tool_result 事件的 idempotency_key 形如 tool-call:{inbound_event_id}:{tool_name}:{call_index}（call_index 跨步骤递增）；幂等键写入与业务写入在同一事务
+- 写工具（`ToolDef.write=True`，含 create_task、complete_task、set_reminder、capture_note、set_timezone、update_task、update_reminder 等）不接受 LLM 提供的幂等键：由代码按入站事件派生，tool_call / tool_result 事件的 idempotency_key 形如 tool-call:{inbound_event_id}:{tool_name}:{call_index}（call_index 跨步骤递增）；幂等键写入与业务写入在同一事务
 - set_timezone：参数为 IANA 时区名；校验通过后更新 user.timezone 并 rev+1
+- 【变更（U2-A）】update_task：按 user_id 校验归属；只修改 title / description（至少提供一个），不改 status，不新建任务；rev+1、updated_at 刷新；非本人或不存在返回 error。
+- 【变更（U2-A）】update_reminder：只允许 status=pending；`SELECT ... FOR UPDATE` 锁行后再校验状态，原地更新现有 trigger 的 fire_at、expires_at 与 payload.note（fire_at 与 note 至少提供一个），trigger id 不变，不取消重建；fire_at 必须是未来时间；更新后写 event_log(type="trigger", payload={status:"updated", reason:"user_updated"})；已被 worker claim 或其他终态返回 error（由 Friday 告知用户）。
+- 【变更（U2-A）】list_notes：按 user_id 查询 direction=tool、type=note 的 event_log，按 occurred_at DESC、id DESC 取最近 N 条（limit 1–100，默认 20）；返回 note_event_id、text、created_at；不新增表。
+- 【变更（U2-A）】reschedule_block 与移动端 Today 改期规则一致：只允许 planned 状态；拒绝跨本地日期；新时长不得少于 5 分钟；与 Today 一致允许把当天已逾期的块修正到过去时刻。
 - 返回统一结构：status（ok | pending_confirmation | error）、data、message
 - 系统提示中注入当前时间与用户时区；代码负责校验并拒绝过去时间或缺少时区的参数
 - 新用户首次回复由代码（非 LLM）追加所用时区说明
