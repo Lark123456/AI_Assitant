@@ -48,7 +48,7 @@ class MockChatRepository implements ChatRepository {
   }
 
   @override
-  Future<void> sendText(String text) async {
+  Future<void> sendText(String text, {String? clientMessageId}) async {
     final trimmed = text.trim();
     if (trimmed.isEmpty) return;
 
@@ -82,6 +82,14 @@ class MockChatRepository implements ChatRepository {
     }
     await _confirmAndReply(id);
   }
+
+  @override
+  Future<void> setActive(bool active) async {
+    // Mock 没有轮询。
+  }
+
+  @override
+  Stream<String?> watchSyncError() => const Stream<String?>.empty();
 
   @override
   Future<void> respondToCard({

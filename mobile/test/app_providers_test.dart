@@ -5,6 +5,7 @@ import 'package:mobile/core/remote_config.dart';
 import 'package:mobile/data/mock/mock_chat_repository.dart';
 import 'package:mobile/data/mock/mock_today_repository.dart';
 import 'package:mobile/data/remote/api_client.dart';
+import 'package:mobile/data/remote/remote_chat_repository.dart';
 import 'package:mobile/data/remote/remote_today_repository.dart';
 import 'package:mobile/domain/enums.dart';
 
@@ -49,6 +50,7 @@ void main() {
     final today = container.read(todayRepositoryProvider);
     expect(today, isA<RemoteTodayRepository>());
     expect(today.readOnly, isFalse);
+    expect(container.read(chatRepositoryProvider), isA<RemoteChatRepository>());
   });
 
   test('网络状态源可切换并广播', () async {

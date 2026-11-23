@@ -30,12 +30,31 @@ final class TextMessage extends ChatMessage {
     super.syncState,
     this.text = '',
     this.streaming = false,
+    this.serverId,
+    this.clientMessageId,
+    this.replyToId,
   });
 
   final String text;
   final bool streaming;
 
-  TextMessage copyWith({String? text, bool? streaming, SyncState? syncState}) {
+  /// 服务端事件 id；本地乐观消息在 POST 成功前为 null。
+  final String? serverId;
+
+  /// 手机消息业务标识；同一消息重试必须复用。
+  final String? clientMessageId;
+
+  /// Friday 回复对应的入站事件 id；仅服务端回复消息有值。
+  final String? replyToId;
+
+  TextMessage copyWith({
+    String? text,
+    bool? streaming,
+    SyncState? syncState,
+    String? serverId,
+    String? clientMessageId,
+    String? replyToId,
+  }) {
     return TextMessage(
       id: id,
       sender: sender,
@@ -44,6 +63,9 @@ final class TextMessage extends ChatMessage {
       syncState: syncState ?? this.syncState,
       text: text ?? this.text,
       streaming: streaming ?? this.streaming,
+      serverId: serverId ?? this.serverId,
+      clientMessageId: clientMessageId ?? this.clientMessageId,
+      replyToId: replyToId ?? this.replyToId,
     );
   }
 }

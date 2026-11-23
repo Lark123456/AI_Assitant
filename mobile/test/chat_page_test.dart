@@ -1,8 +1,11 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mobile/core/clock.dart';
 import 'package:mobile/core/providers.dart';
+import 'package:mobile/core/remote_config.dart';
 import 'package:mobile/core/strings.dart';
 import 'package:mobile/core/theme/app_theme.dart';
 import 'package:mobile/data/mock/mock_chat_repository.dart';
@@ -26,7 +29,13 @@ final class _FailingRepository implements ChatRepository {
       Stream<List<ChatMessage>>.error(StateError('boom'));
 
   @override
-  Future<void> sendText(String text) async {}
+  Future<void> sendText(String text, {String? clientMessageId}) async {}
+
+  @override
+  Future<void> setActive(bool active) async {}
+
+  @override
+  Stream<String?> watchSyncError() => const Stream<String?>.empty();
 
   @override
   Future<void> respondToCard({
@@ -35,41 +44,94 @@ final class _FailingRepository implements ChatRepository {
   }) async {}
 }
 
+/// 可观测 setActive 与同步错误的仓库，用于页面生命周期/横幅测试。
+final class _SpyRepository implements ChatRepository {
+  final _messages = StreamController<List<ChatMessage>>.broadcast();
+  final _syncErrors = StreamController<String?>.broadcast();
+  final activeCalls = <bool>[];
+
+  @override
+  Stream<List<ChatMessage>> watchMessages() async* {
+    yield const [];
+    yield* _messages.stream;
+  }
+
+  @override
+  Future<void> sendText(String text, {String? clientMessageId}) async {}
+
+  @override
+  Future<void> setActive(bool active) async {
+    activeCalls.add(active);
+  }
+
+  @override
+  Stream<String?> watchSyncError() => _syncErrors.stream;
+
+  @override
+  Future<void> respondToCard({
+    required String messageId,
+    required CardAction action,
+  }) async {}
+
+  void emitSyncError(String? error) => _syncErrors.add(error);
+
+  void dispose() {
+    _messages.close();
+    _syncErrors.close();
+  }
+}
+
 TextMessage _text(
   String id,
   String text, {
   ChatSender sender = ChatSender.user,
-}) => TextMessage(id: id, sender: sender, createdAt: _now, text: text);
+  SyncState syncState = SyncState.synced,
+}) => TextMessage(
+  id: id,
+  sender: sender,
+  createdAt: _now,
+  text: text,
+  syncState: syncState,
+);
 
 Widget _app({
   List<ChatMessage> seed = const [],
   NetworkStatus network = NetworkStatus.online,
   bool failing = false,
+  bool remote = false,
   double textScale = 1.0,
-  MockChatRepository? repository,
+  ChatRepository? repository,
 }) {
   final clock = _FakeClock();
   return ProviderScope(
     overrides: [
+      selectedTabProvider.overrideWith(() => SelectedTab(chatTabIndex)),
       clockProvider.overrideWithValue(clock),
+      if (remote)
+        remoteConfigProvider.overrideWithValue(
+          const RemoteConfig(
+            enabled: true,
+            baseUrl: 'http://127.0.0.1:8000',
+            user: 'dev-user',
+          ),
+        ),
       mockNetworkStatusSourceProvider.overrideWithValue(
         MockNetworkStatusSource(initial: network),
       ),
       chatRepositoryProvider.overrideWith((ref) {
         if (failing) return _FailingRepository();
-        final repo =
-            repository ??
-            MockChatRepository(
-              clock: clock,
-              network: MockNetworkStatusSource(initial: network),
-              seed: seed,
-              sendDelay: Duration.zero,
-              replyDelay: Duration.zero,
-              streamInterval: Duration.zero,
-              streamChunk: 4,
-            );
-        ref.onDispose(repo.dispose);
-        return repo;
+        if (repository != null) return repository;
+        final created = MockChatRepository(
+          clock: clock,
+          network: MockNetworkStatusSource(initial: network),
+          seed: seed,
+          sendDelay: Duration.zero,
+          replyDelay: Duration.zero,
+          streamInterval: Duration.zero,
+          streamChunk: 4,
+        );
+        ref.onDispose(created.dispose);
+        return created;
       }),
     ],
     child: MaterialApp(
@@ -325,5 +387,50 @@ void main() {
     await tester.tap(find.byTooltip(S.more));
     await tester.pumpAndSettle();
     expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('处理中的用户消息显示 Friday 正在处理', (tester) async {
+    await tester.pumpWidget(
+      _app(seed: [_text('m-1', '明天提醒我交报告', syncState: SyncState.pending)]),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text(S.chatProcessing), findsOneWidget);
+  });
+
+  testWidgets('前后台切换通过 setActive 暂停与恢复轮询', (tester) async {
+    final repository = _SpyRepository();
+    addTearDown(repository.dispose);
+    await tester.pumpWidget(_app(repository: repository));
+    await tester.pumpAndSettle();
+
+    expect(repository.activeCalls.last, isTrue);
+
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
+    await tester.pumpAndSettle();
+    expect(repository.activeCalls.last, isFalse);
+
+    // Flutter 生命周期为状态机：paused → hidden → inactive → resumed。
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.hidden);
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+    await tester.pumpAndSettle();
+    expect(repository.activeCalls.last, isTrue);
+  });
+
+  testWidgets('远程同步失败显示横幅，恢复后消失', (tester) async {
+    final repository = _SpyRepository();
+    addTearDown(repository.dispose);
+    await tester.pumpWidget(_app(repository: repository, remote: true));
+    await tester.pumpAndSettle();
+    expect(find.text(S.chatSyncFailed), findsNothing);
+
+    repository.emitSyncError(S.chatSyncFailed);
+    await tester.pumpAndSettle();
+    expect(find.text(S.chatSyncFailed), findsOneWidget);
+
+    repository.emitSyncError(null);
+    await tester.pumpAndSettle();
+    expect(find.text(S.chatSyncFailed), findsNothing);
   });
 }

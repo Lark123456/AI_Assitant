@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -9,14 +11,62 @@ import '../../domain/models/card_action.dart';
 import '../../domain/models/chat_message.dart';
 import 'chat_controller.dart';
 
-class ChatPage extends ConsumerWidget {
+/// Chat 在 4 Tab 外壳中的下标；离开该 Tab 时暂停轮询。
+const chatTabIndex = 1;
+
+class ChatPage extends ConsumerStatefulWidget {
   const ChatPage({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<ChatPage> createState() => _ChatPageState();
+}
+
+class _ChatPageState extends ConsumerState<ChatPage>
+    with WidgetsBindingObserver {
+  var _appActive = true;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    WidgetsBinding.instance.addPostFrameCallback((_) => _syncPolling());
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    final active = state == AppLifecycleState.resumed;
+    if (active == _appActive) return;
+    _appActive = active;
+    _syncPolling();
+  }
+
+  /// 只有“App 在前台且当前 Tab 是 Chat”时才轮询。
+  void _syncPolling() {
+    if (!mounted) return;
+    final selected = ref.read(selectedTabProvider);
+    unawaited(
+      ref
+          .read(chatControllerProvider.notifier)
+          .setPollingActive(_appActive && selected == chatTabIndex),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    ref.listen<int>(selectedTabProvider, (previous, next) => _syncPolling());
     final async = ref.watch(chatControllerProvider);
-    final networkStatus = ref.watch(networkStatusProvider).value;
+    final remote = ref.watch(remoteConfigProvider).enabled;
+    final networkStatus = remote
+        ? null
+        : ref.watch(networkStatusProvider).value;
     final sendError = async.value?.sendError;
+    final syncError = async.value?.syncError;
 
     return Scaffold(
       appBar: AppBar(
@@ -32,10 +82,12 @@ class ChatPage extends ConsumerWidget {
         top: false,
         child: Column(
           children: [
-            if (networkStatus == NetworkStatus.offline)
+            if (!remote && networkStatus == NetworkStatus.offline)
               const _Banner(text: S.offline, icon: Icons.cloud_off_outlined)
-            else if (networkStatus == NetworkStatus.syncing)
+            else if (!remote && networkStatus == NetworkStatus.syncing)
               const _Banner(text: S.syncing, icon: Icons.sync),
+            if (syncError != null)
+              _Banner(text: syncError, icon: Icons.sync_problem),
             if (sendError != null)
               _Banner(text: sendError, icon: Icons.error_outline),
             Expanded(
@@ -351,6 +403,13 @@ class _TextBubble extends ConsumerWidget {
               '${message.text}${message.streaming ? '▍' : ''}',
               style: theme.textTheme.bodyMedium?.copyWith(color: textColor),
             ),
+            if (isUser && message.syncState == SyncState.pending) ...[
+              const SizedBox(height: AppSpacing.xs),
+              Text(
+                S.chatProcessing,
+                style: theme.textTheme.labelSmall?.copyWith(color: textColor),
+              ),
+            ],
             if (message.syncState == SyncState.queued) ...[
               const SizedBox(height: AppSpacing.xs),
               Text(

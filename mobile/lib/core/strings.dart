@@ -22,6 +22,8 @@ abstract final class S {
   static const sending = '发送中';
   static const waitingForNetwork = '等待联网';
   static const sendFailed = '网络异常，请重试';
+  static const chatProcessing = 'Friday 正在处理';
+  static const chatSyncFailed = '消息同步失败，正在重试';
   static const newMessages = '新消息';
 
   static const todayEmpty = '今天还没有安排';
