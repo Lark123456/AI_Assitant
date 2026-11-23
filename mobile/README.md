@@ -3,7 +3,7 @@
 Flutter 子项目，对应 `docs/mobile-u1-plan.md`。
 历史技术报告已归档到 `docs/archive/mobile-u1-technical-plan-v2.4.4.md`（冻结）；
 会话同步、多会话与专题、邀请卡、PriorityAlert 见 `docs/deferred/mobile-sync-and-topics.md`（延后）。
-U1 只做客户端与 Mock；U2 起接入真实后端，当前仅 Today 页面。
+U1 只做客户端与 Mock；U2 起接入真实后端，Today 与 Chat 已接真实 API。
 
 ## 环境
 
@@ -112,9 +112,9 @@ $env:SCREENSHOTS="1"
 
 当前环境未连接 Android 设备或模拟器，因此这些是组件渲染截图，不是真机截图；真机验收仍标记为「待验收」。
 
-## 远程 Today（U2）
+## 远程 Today 与 Chat（U2）
 
-默认仍是 Mock；用 `--dart-define` 开启真实 Today 数据。后端 `.env` 需先开启移动端 API：
+默认仍是 Mock；用 `--dart-define` 开启真实 Today 与 Chat 数据。后端 `.env` 需先开启移动端 API：
 
 ```dotenv
 ENABLE_MOBILE_API=1
@@ -138,11 +138,35 @@ adb reverse tcp:8000 tcp:8000
 一个任务可以有多个时间块（分段推进）；移动端「排进今天」只从未排期列表创建第一个块，后续块可由对话或任务页补充。
 已完成/跳过的提醒会取消触发并保留终态；失败或已取消的提醒不可再操作。
 未勾选的晚间复盘条目保持原状态；失效或不可操作的条目会被跳过，不影响其余条目。
-晨间/晚间简报暂返回空，聊天仍为 Mock。`adb reverse` 需要手机开启 USB 调试；也可以把后端改为局域网地址。
+晨间/晚间简报暂返回空；`USE_REMOTE=true` 时 Chat 也已接真实接口。
+
+### 远程 Chat
+
+后端接口：
+
+- `POST /api/mobile/chat/messages`：body `{clientMessageId, text}`；`clientMessageId` 是唯一业务标识，请求头 `Idempotency-Key` 若出现必须与它一致。
+- `GET /api/mobile/chat/messages?limit=50&after=<id>&before=<id>`：首屏先取最新 N 条再升序返回；`after` 只取增量，`before` 向上翻更早历史。
+- `GET /api/mobile/chat/messages/{id}`：单条状态补偿，用于发现 processing → done/failed。
+
+客户端行为：
+
+- 首屏最近 50 条；之后每 2 秒用 `after` 游标轮询，单飞防重入，失败指数退避（上限 30 秒）并显示同步横幅。
+- 本地乐观消息按 `clientMessageId` 与服务端回显合并；发送失败可重试，未到达服务器时复用原 id。
+- 服务端已确认 `failed` 的消息不会原地重跑，重试会生成新的 `clientMessageId`。
+- `processing` 的入站消息由单条状态接口补偿，不会一直停在“Friday 正在处理”。
+- App 进入后台或切离 Chat Tab 时停止轮询；回前台/回到 Chat 时由 `setActive(true)` 立即刷新。
+- Remote 模式暂不支持卡片应答与流式回复；卡片仅在 Mock 模式可用。
+
+开发期边界：
+
+- `ENABLE_MOBILE_API=1` 才挂载 `/api/mobile/chat/*`；关闭时返回 404。
+- 仍是开发期 `X-Butler-User` 认证，只允许本机或 `adb reverse` 调试，`ALLOWED_OPEN_IDS` 不能替代真实认证。
+- API 服务只支持单进程（同一用户的串行锁是进程内 `asyncio.Lock`）；多 worker/多副本需要跨进程队列或租约。
+- 手机没有服务端推送：Friday 回复落库后由 App 轮询取回，状态为 `available`（不是 `sent`）。
 
 ## 验收状态
 
-- `analyze` / `format` / `test` / `build apk --debug`：通过（109 项测试；3 项截图生成测试默认跳过）
+- `analyze` / `format` / `test` / `build apk --debug`：通过（122 项测试；3 项截图生成测试默认跳过）
 - APK SDK：`sdkVersion 26`、`targetSdkVersion 36`
 - 应用名：`Butler`（Android label；包名仍为 `com.butler.mobile`）
 - 最新 Debug APK：`build/app/outputs/flutter-apk/app-debug.apk`

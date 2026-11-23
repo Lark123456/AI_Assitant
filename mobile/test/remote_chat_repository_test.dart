@@ -298,6 +298,29 @@ void main() {
     await repository.setActive(false);
   });
 
+  test('轮询失败保留已有消息', () async {
+    var calls = 0;
+    final client = _FakeApiClient(
+      onGet: (path) async {
+        calls += 1;
+        if (calls == 1) {
+          return _page([_message(id: 'm1', text: '旧消息')], nextCursor: 'm1');
+        }
+        throw const ApiException('boom');
+      },
+      onPost: (path, body, key) async => {},
+    );
+    final repository = _repository(client);
+    addTearDown(repository.dispose);
+
+    await repository.watchMessages().first;
+    await repository.setActive(true);
+    final messages = await repository.watchMessages().first;
+
+    expect((messages.single as TextMessage).text, '旧消息');
+    await repository.setActive(false);
+  });
+
   test('setActive(false) 停止定时轮询', () async {
     var calls = 0;
     final client = _FakeApiClient(
