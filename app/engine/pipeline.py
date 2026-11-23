@@ -6,6 +6,11 @@
 - process 事务拆分：agent+工具先 commit，再发送回复，outbound 事件另开事务记录；
   LLM 调用前先释放读事务，避免长时间占用连接。
 - 白名单 ALLOWED_OPEN_IDS 对所有渠道生效（配置了名单即只放名单内的外部 id）。
+
+U2-A2（手机渠道）：
+- 手机回复与工具写入、inbound_processing(done) 在同一事务提交，随后直接返回，
+  跳过 adapter.send 与 outbound 事务 B；outbound 幂等键 mobile-reply:{event_id}。
+- MobileAdapter.send 不会被正常手机路径调用，也不写 event_log。
 """
 
 import uuid
@@ -42,6 +47,7 @@ class IngestedEvent:
     trace_id: str
     is_new_user: bool
     created: bool  # 入站事件是否新写入（False = 重复事件）
+    client_message_id: str | None = None  # 手机消息的业务标识（其他渠道为空）
 
 
 class InboundPipeline:
@@ -164,6 +170,7 @@ class InboundPipeline:
             trace_id=trace_id,
             is_new_user=is_new_user,
             created=created,
+            client_message_id=client_message_id,
         )
 
     async def process(self, ingested: IngestedEvent) -> None:
@@ -172,13 +179,18 @@ class InboundPipeline:
             return
         try:
             await self._process_one(ingested)
-        except Exception:
+        except Exception as exc:
             logger.exception("inbound processing crashed: event_id=%s", ingested.event_id)
-            await self._mark_status(ingested.event_id, "failed")
+            await self._mark_status(
+                ingested.event_id,
+                "failed",
+                error=f"{type(exc).__name__}: {exc}"[:500],
+            )
 
     async def _process_one(self, ingested: IngestedEvent) -> None:
         with log_context(trace_id=ingested.trace_id, user_id=str(ingested.user_id)):
             adapter = self._adapters[ingested.event.channel]
+            is_mobile = ingested.event.channel == "mobile"
             # 事务 A：agent + 工具写入。先短读用户并 commit 释放连接，再进 LLM 循环，
             # 避免第一次模型调用期间持有事务。
             async with self._sessionmaker() as session:
@@ -204,6 +216,15 @@ class InboundPipeline:
                     logger.exception("friday handle failed, replying fallback")
                     await session.rollback()
                     reply = FALLBACK_REPLY.format(trace=ingested.trace_id[:8])
+                if is_mobile:
+                    # 手机安全完成路径：回复、工具写入与 done 同一事务提交。
+                    # 中途崩溃则整体回滚，recovery 重跑不会留下半成品；
+                    # 这里不调用 MobileAdapter.send，也不写 send_ok。
+                    if reply:
+                        await self._append_mobile_reply(session, ingested, reply)
+                    await self._apply_status(session, ingested.event_id, "done")
+                    await session.commit()
+                    return
                 await session.commit()
 
             if ingested.is_new_user and reply:
@@ -250,6 +271,31 @@ class InboundPipeline:
                 await self._apply_status(session, ingested.event_id, "done")
                 await session.commit()
 
+    async def _append_mobile_reply(
+        self, session: AsyncSession, ingested: IngestedEvent, reply: str
+    ) -> None:
+        """手机回复的唯一写入点；与 done 同事务提交。
+
+        幂等键 mobile-reply:{event_id} 保证同一入站事件最多一条回复；
+        payload 用 delivery="persisted" 表示“已落库、可供 App 轮询”，不使用 send_ok。
+        """
+        await append_event(
+            session,
+            user_id=ingested.user_id,
+            channel="mobile",
+            direction="outbound",
+            type="message",
+            payload={
+                "text": reply,
+                "delivery": "persisted",
+                "reply_to_event_id": str(ingested.event_id),
+                "client_message_id": ingested.client_message_id,
+            },
+            trace_id=ingested.trace_id,
+            clock=self._clock,
+            idempotency_key=f"mobile-reply:{ingested.event_id}",
+        )
+
     async def recover_unfinished(self) -> int:
         """启动补处理：重放状态仍为 processing 的入站事件（工具幂等键保证不重复写）。
 
@@ -289,28 +335,37 @@ class InboundPipeline:
                     trace_id=event.trace_id,
                     is_new_user=False,
                     created=True,
+                    client_message_id=event.payload.get("client_message_id"),
                 )
             )
         if count:
             logger.info("startup: recovered %d unfinished inbound events", count)
         return count
 
-    async def _mark_status(self, event_id: uuid.UUID, status: str) -> None:
+    async def _mark_status(
+        self, event_id: uuid.UUID, status: str, *, error: str | None = None
+    ) -> None:
         try:
             async with self._sessionmaker() as session:
-                await self._apply_status(session, event_id, status)
+                await self._apply_status(session, event_id, status, error=error)
                 await session.commit()
         except Exception:
             logger.exception("failed to mark inbound_processing status: event_id=%s", event_id)
 
     async def _apply_status(
-        self, session: AsyncSession, event_id: uuid.UUID, status: str
+        self,
+        session: AsyncSession,
+        event_id: uuid.UUID,
+        status: str,
+        *,
+        error: str | None = None,
     ) -> None:
         """更新处理状态；迁移前的旧事件没有状态行，跳过即可。"""
         row = await session.get(InboundProcessing, event_id)
         if row is None:
             return
         row.status = status
+        row.error = error if status == "failed" else None
         row.updated_at = self._clock.now()
 
     async def handle(self, event: InboundEvent) -> None:

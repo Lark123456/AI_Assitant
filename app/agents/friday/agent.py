@@ -69,6 +69,7 @@ class FridayAgent:
         history = await build_history(
             session,
             user_id=user.id,
+            channel=channel,
             exclude_event_id=source_event_id,
             clock=clock,
         )

@@ -14,6 +14,7 @@ from fastapi import FastAPI
 from app.adapters.base import ChannelAdapter
 from app.adapters.console_adapter import ConsoleAdapter
 from app.adapters.identity import make_identity_resolver
+from app.adapters.mobile_adapter import MobileAdapter
 from app.api.routes.console import router as console_router
 from app.api.routes.health import router as health_router
 from app.api.routes.mobile import router as mobile_router
@@ -54,6 +55,12 @@ def create_app() -> FastAPI:
     adapters: dict[str, ChannelAdapter] = {
         "console": ConsoleAdapter(make_identity_resolver(sessionmaker, "console"))
     }
+    if settings.enable_mobile_api:
+        # 注册而非推送：手机回复由 Pipeline 落库，App 通过 chat API 轮询获取；
+        # 注册同时让本服务的 recover_unfinished 接手未完成的手机消息。
+        adapters["mobile"] = MobileAdapter(
+            make_identity_resolver(sessionmaker, "mobile")
+        )
 
     pipeline = InboundPipeline(
         sessionmaker=sessionmaker,

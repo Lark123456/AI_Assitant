@@ -1,8 +1,9 @@
 """从 event_log 重建 Friday 的短期对话窗口。
 
-规则：最近 24 小时内、最多 12 条消息事件，取较少者；总长度约 4000 字符，
-超出时从最旧的开始裁剪。简报（delivery 事件）以 assistant 消息进入窗口，
-并附上方括号系统注记，使「第一个做完了」这类回复能解析到 block_id。
+规则：只取同一渠道（手机/飞书/Console 上下文隔离）；最近 24 小时内、最多 12 条
+消息事件，取较少者；总长度约 4000 字符，超出时从最旧的开始裁剪。简报（delivery
+事件）以 assistant 消息进入窗口，并附上方括号系统注记，使「第一个做完了」这类
+回复能解析到 block_id。
 """
 
 import datetime as dt
@@ -37,13 +38,15 @@ async def build_history(
     session: AsyncSession,
     *,
     user_id: uuid.UUID,
+    channel: str,
     exclude_event_id: uuid.UUID | None,
     clock: Clock,
 ) -> list[dict]:
-    """返回可直接拼进 messages 的历史（升序，不含当前消息）。"""
+    """返回可直接拼进 messages 的历史（升序，不含当前消息；只含同渠道事件）。"""
     now = clock.now()
     conditions = [
         EventLog.user_id == user_id,
+        EventLog.channel == channel,
         EventLog.occurred_at >= now - dt.timedelta(hours=WINDOW_HOURS),
         or_(
             and_(EventLog.direction == "inbound", EventLog.type == "message"),
