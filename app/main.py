@@ -17,6 +17,7 @@ from app.adapters.identity import make_identity_resolver
 from app.api.routes.console import router as console_router
 from app.api.routes.health import router as health_router
 from app.api.routes.mobile import router as mobile_router
+from app.api.routes.mobile_chat import router as mobile_chat_router
 from app.core.clock import Clock
 from app.core.config import get_settings
 from app.core.logging import get_logger, setup_logging
@@ -82,6 +83,7 @@ def create_app() -> FastAPI:
         if not settings.allowed_open_ids.strip():
             logger.warning("mobile API enabled without ALLOWED_OPEN_IDS: dev auth only")
         app.include_router(mobile_router)
+        app.include_router(mobile_chat_router)
     app.include_router(health_router)
     return app
 

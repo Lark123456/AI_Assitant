@@ -75,7 +75,6 @@ class InboundPipeline:
                 event.channel,
             )
             return None
-        trace_id = new_trace_id()
         async with self._sessionmaker() as session:
             user, is_new = await get_or_create_user(
                 session,
@@ -86,45 +85,84 @@ class InboundPipeline:
                 default_timezone=self._settings.default_timezone,
                 clock=self._clock,
             )
-            row, created = await append_event(
-                session,
-                user_id=user.id,
-                channel=event.channel,
-                direction="inbound",
-                type=event.kind,
-                payload={
-                    "kind": event.kind,
-                    "text": event.text,
-                    "callback_payload": event.callback_payload,
-                    "raw": event.raw,
-                },
-                trace_id=trace_id,
-                clock=self._clock,
-                idempotency_key=event.idempotency_key,
-                occurred_at=event.occurred_at,
+            ingested = await self._record_inbound(
+                session, event, user_id=user.id, is_new_user=is_new
             )
-            if created:
-                # 处理状态与入站事件同一事务写入；崩溃后由启动补处理兜底
-                session.add(
-                    InboundProcessing(
-                        event_id=row.id,
-                        user_id=user.id,
-                        status="processing",
-                        updated_at=self._clock.now(),
-                    )
-                )
-            await session.commit()
-        if not created:
+        if not ingested.created:
             logger.info(
                 "duplicate inbound event skipped: channel=%s key=%s",
                 event.channel, event.idempotency_key,
             )
+        return ingested
+
+    async def ingest_for_user(
+        self,
+        event: InboundEvent,
+        user: User,
+        *,
+        client_message_id: str | None = None,
+    ) -> IngestedEvent:
+        """手机入口：使用已认证 User 落库，不重新 onboarding、不创建渠道身份。
+
+        白名单已由 Mobile API 的 get_mobile_user 完成；这里不再用 external_user_id 判断。
+        """
+        async with self._sessionmaker() as session:
+            return await self._record_inbound(
+                session,
+                event,
+                user_id=user.id,
+                is_new_user=False,
+                client_message_id=client_message_id,
+            )
+
+    async def _record_inbound(
+        self,
+        session: AsyncSession,
+        event: InboundEvent,
+        *,
+        user_id: uuid.UUID,
+        is_new_user: bool,
+        client_message_id: str | None = None,
+    ) -> IngestedEvent:
+        """入站事件与 processing 状态在同一事务写入并提交。"""
+        trace_id = new_trace_id()
+        payload = {
+            "kind": event.kind,
+            "text": event.text,
+            "callback_payload": event.callback_payload,
+            "raw": event.raw,
+        }
+        if client_message_id is not None:
+            payload["client_message_id"] = client_message_id
+        row, created = await append_event(
+            session,
+            user_id=user_id,
+            channel=event.channel,
+            direction="inbound",
+            type=event.kind,
+            payload=payload,
+            trace_id=trace_id,
+            clock=self._clock,
+            idempotency_key=event.idempotency_key,
+            occurred_at=event.occurred_at,
+        )
+        if created:
+            # 处理状态与入站事件同一事务写入；崩溃后由启动补处理兜底
+            session.add(
+                InboundProcessing(
+                    event_id=row.id,
+                    user_id=user_id,
+                    status="processing",
+                    updated_at=self._clock.now(),
+                )
+            )
+        await session.commit()
         return IngestedEvent(
             event=event,
             event_id=row.id,
-            user_id=user.id,
+            user_id=user_id,
             trace_id=trace_id,
-            is_new_user=is_new,
+            is_new_user=is_new_user,
             created=created,
         )
 
