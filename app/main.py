@@ -28,6 +28,7 @@ from app.core.logging import get_logger, setup_logging
 from app.db.base import make_engine, make_sessionmaker
 from app.embeddings.service import build_embedding_service
 from app.engine.pipeline import InboundPipeline
+from app.engine.streaming import ChatStreamBroker
 from app.llm.gateway import LLMGateway
 from app.llm.providers.base import BaseProvider
 from app.llm.providers.openai_compat import OpenAICompatProvider
@@ -42,6 +43,7 @@ def create_app() -> FastAPI:
     clock = Clock()
     engine = make_engine(settings.database_url)
     sessionmaker = make_sessionmaker(engine)
+    stream_broker = ChatStreamBroker()
 
     providers: dict[str, BaseProvider] = {
         "openai_compat": OpenAICompatProvider(settings.llm_base_url, settings.llm_api_key),
@@ -72,6 +74,7 @@ def create_app() -> FastAPI:
         gateway=gateway,
         adapters=adapters,
         embedder=build_embedding_service(settings),
+        stream_broker=stream_broker,
     )
 
     @asynccontextmanager
@@ -87,6 +90,7 @@ def create_app() -> FastAPI:
     app.state.clock = clock
     app.state.sessionmaker = sessionmaker
     app.state.settings = settings
+    app.state.chat_stream_broker = stream_broker
     if settings.enable_console:
         app.include_router(console_router)
     if settings.enable_mobile_api:

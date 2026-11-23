@@ -165,7 +165,8 @@ async def test_mobile_adapter_send_is_noop(db, fake_clock):
     adapter = MobileAdapter(make_identity_resolver(db, "mobile"))
     assert adapter.channel == "mobile"
     assert adapter.capabilities.can_push_unsolicited is False
-    assert adapter.capabilities.streaming is False
+    # streaming=True 表示手机端支持 SSE 拉流，不代表 adapter 主动推送
+    assert adapter.capabilities.streaming is True
 
     result = await adapter.send(
         OutboundIntent(type="text", user_id=uuid.uuid4(), body={"text": "hi"})

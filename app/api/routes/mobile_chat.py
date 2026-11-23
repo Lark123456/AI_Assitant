@@ -13,21 +13,25 @@
 """
 
 import asyncio
+import json
 import uuid
+from collections.abc import AsyncIterator
 from typing import Annotated, Any
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, Response
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import and_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.adapters.base import InboundEvent
-from app.api.routes.mobile import get_mobile_user, get_session
+from app.api.routes.mobile import get_mobile_user, get_session, resolve_mobile_user
 from app.core.logging import get_logger
 from app.core.tasks import spawn
 from app.db.models import EventLog, InboundProcessing, User
 from app.engine.pipeline import InboundPipeline, IngestedEvent
+from app.engine.streaming import ChatStreamBroker, StreamMessage
 
 router = APIRouter(prefix="/api/mobile/chat")
 logger = get_logger(__name__)
@@ -36,6 +40,12 @@ MAX_CLIENT_MESSAGE_ID = 200
 MAX_TEXT = 4000
 DEFAULT_LIMIT = 50
 MAX_LIMIT = 100
+STREAM_HEARTBEAT_SECONDS = 15.0
+STREAM_HEADERS = {
+    "Cache-Control": "no-cache",
+    "Connection": "keep-alive",
+    "X-Accel-Buffering": "no",
+}
 
 
 class SendMessageRequest(BaseModel):
@@ -293,6 +303,102 @@ async def list_messages(
     }
 
 
+async def _load_mobile_message(
+    session: AsyncSession,
+    user: User,
+    message_id: str,
+    *,
+    inbound_only: bool,
+) -> EventLog:
+    """按 id 取当前用户的手机聊天消息；不存在/越权返回 404。"""
+    try:
+        event_id = uuid.UUID(message_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail="消息不存在") from exc
+    event = await session.get(EventLog, event_id)
+    directions = ("inbound",) if inbound_only else ("inbound", "outbound")
+    if (
+        event is None
+        or event.user_id != user.id
+        or event.channel != "mobile"
+        or event.type != "message"
+        or event.direction not in directions
+    ):
+        raise HTTPException(status_code=404, detail="消息不存在")
+    return event
+
+
+async def _find_reply(
+    session: AsyncSession, user: User, inbound_id: uuid.UUID
+) -> EventLog | None:
+    """查询某条入站消息已落库的 Friday 回复。"""
+    return (
+        await session.execute(
+            select(EventLog)
+            .where(
+                EventLog.user_id == user.id,
+                EventLog.channel == "mobile",
+                EventLog.direction == "outbound",
+                EventLog.type == "message",
+                EventLog.payload["reply_to_event_id"].astext == str(inbound_id),
+            )
+            .order_by(EventLog.occurred_at.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+
+
+def _reply_done_payload(
+    reply: EventLog, inbound_id: uuid.UUID, tz: str
+) -> dict:
+    return {
+        "text": str((reply.payload or {}).get("text", "")),
+        "messageId": str(reply.id),
+        "replyToId": str(inbound_id),
+        "createdAt": reply.occurred_at.astimezone(ZoneInfo(tz)).isoformat(),
+    }
+
+
+def _sse(event: str, payload: dict) -> str:
+    return f"event: {event}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
+
+
+async def _single_sse_event(event: str, payload: dict) -> AsyncIterator[str]:
+    yield _sse(event, payload)
+
+
+async def _stream_sse(
+    request: Request,
+    broker: ChatStreamBroker,
+    event_id: uuid.UUID,
+    queue: asyncio.Queue[StreamMessage],
+    initial: list[StreamMessage],
+) -> AsyncIterator[str]:
+    """转发 broker 事件；空闲时发送心跳并检测客户端断开。"""
+    try:
+        terminal = False
+        for kind, payload in initial:
+            yield _sse(kind, payload)
+            terminal = kind in ("done", "error")
+        if terminal:
+            return
+        while True:
+            try:
+                kind, payload = await asyncio.wait_for(
+                    queue.get(), timeout=STREAM_HEARTBEAT_SECONDS
+                )
+            except TimeoutError:
+                if await request.is_disconnected():
+                    return
+                yield ": ping\n\n"
+                continue
+            yield _sse(kind, payload)
+            if kind in ("done", "error"):
+                return
+    finally:
+        broker.detach(event_id, queue)
+
+
 @router.get("/messages/{message_id}")
 async def get_message(
     message_id: str,
@@ -300,20 +406,75 @@ async def get_message(
     session: Annotated[AsyncSession, Depends(get_session)],
 ) -> dict:
     """查询单条手机消息的最新状态；不存在或不属于当前用户时 404。"""
-    try:
-        event_id = uuid.UUID(message_id)
-    except ValueError as exc:
-        raise HTTPException(status_code=404, detail="消息不存在") from exc
-    event = await session.get(EventLog, event_id)
-    if (
-        event is None
-        or event.user_id != user.id
-        or event.channel != "mobile"
-        or event.type != "message"
-        or event.direction not in ("inbound", "outbound")
-    ):
-        raise HTTPException(status_code=404, detail="消息不存在")
+    event = await _load_mobile_message(
+        session, user, message_id, inbound_only=False
+    )
     statuses = await _inbound_statuses(
         session, [event.id] if event.direction == "inbound" else []
     )
     return _message_item(event, status=statuses.get(event.id), tz=user.timezone)
+
+
+@router.get("/messages/{message_id}/stream")
+async def stream_message(
+    message_id: str,
+    request: Request,
+    x_butler_user: Annotated[str | None, Header(alias="X-Butler-User")] = None,
+) -> StreamingResponse:
+    """SSE 流式回复：delta 为累计文本，done 为最终持久化回复。
+
+    若处理已完成，直接从 broker 终态或数据库回复返回；processing 但 broker
+    无状态（重启/多进程）时返回 stream_unavailable，客户端回退轮询。
+    """
+    broker: ChatStreamBroker | None = getattr(
+        request.app.state, "chat_stream_broker", None
+    )
+    attachment: (
+        tuple[asyncio.Queue[StreamMessage], list[StreamMessage]] | None
+    ) = None
+    terminal: StreamMessage | None = None
+    event_id: uuid.UUID
+    async with request.app.state.sessionmaker() as session:
+        user = await resolve_mobile_user(session, request, x_butler_user)
+        event = await _load_mobile_message(
+            session, user, message_id, inbound_only=True
+        )
+        event_id = event.id
+        if broker is not None and broker.has(event.id):
+            attachment = broker.attach(event.id)
+        if attachment is None:
+            status = (await _inbound_statuses(session, [event.id]))[event.id]
+            if status == "failed":
+                terminal = ("error", {"code": "processing_failed"})
+            elif status == "processing":
+                terminal = ("error", {"code": "stream_unavailable"})
+            else:
+                reply = await _find_reply(session, user, event.id)
+                terminal = (
+                    ("done", _reply_done_payload(reply, event.id, user.timezone))
+                    if reply is not None
+                    else (
+                        "done",
+                        {
+                            "text": "",
+                            "messageId": None,
+                            "replyToId": str(event.id),
+                            "createdAt": None,
+                        },
+                    )
+                )
+
+    if attachment is not None:
+        assert broker is not None
+        queue, initial = attachment
+        return StreamingResponse(
+            _stream_sse(request, broker, event_id, queue, initial),
+            media_type="text/event-stream",
+            headers=STREAM_HEADERS,
+        )
+    assert terminal is not None
+    return StreamingResponse(
+        _single_sse_event(*terminal),
+        media_type="text/event-stream",
+        headers=STREAM_HEADERS,
+    )

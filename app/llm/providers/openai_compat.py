@@ -7,6 +7,7 @@
 import asyncio
 import json
 import time
+from collections.abc import Callable
 
 import httpx
 
@@ -39,6 +40,7 @@ class OpenAICompatProvider(BaseProvider):
         messages: list[dict],
         tools: list[dict] | None,
         params: dict,
+        on_delta: Callable[[str], None] | None = None,
     ) -> LLMResult:
         payload: dict = {"model": model, "messages": messages, **params}
         if tools:
@@ -46,13 +48,20 @@ class OpenAICompatProvider(BaseProvider):
         if STREAM:
             payload["stream"] = True
             payload["stream_options"] = {"include_usage": True}
-        return await self._request_with_retries(payload, timeout=params.get("timeout", 30))
+        return await self._request_with_retries(
+            payload, timeout=params.get("timeout", 30), on_delta=on_delta
+        )
 
-    async def _request_with_retries(self, payload: dict, timeout: float) -> LLMResult:
+    async def _request_with_retries(
+        self,
+        payload: dict,
+        timeout: float,
+        on_delta: Callable[[str], None] | None = None,
+    ) -> LLMResult:
         last_exc: Exception | None = None
         for attempt in range(MAX_ATTEMPTS):
             try:
-                return await self._do_request(payload, timeout)
+                return await self._do_request(payload, timeout, on_delta=on_delta)
             except httpx.HTTPStatusError as exc:
                 if exc.response.status_code < 500:
                     raise
@@ -63,7 +72,13 @@ class OpenAICompatProvider(BaseProvider):
         assert last_exc is not None
         raise last_exc
 
-    async def _do_request(self, payload: dict, timeout: float) -> LLMResult:
+    async def _do_request(
+        self,
+        payload: dict,
+        timeout: float,
+        *,
+        on_delta: Callable[[str], None] | None = None,
+    ) -> LLMResult:
         start = time.perf_counter()
         async with httpx.AsyncClient(
             base_url=self._base_url,
@@ -72,7 +87,7 @@ class OpenAICompatProvider(BaseProvider):
             transport=self._transport,
         ) as client:
             if payload.get("stream"):
-                result = await self._stream_once(client, payload, start)
+                result = await self._stream_once(client, payload, start, on_delta=on_delta)
             else:
                 result = await self._non_stream_once(client, payload, start)
         return result
@@ -83,7 +98,14 @@ class OpenAICompatProvider(BaseProvider):
         body = resp.json()
         return self._from_full_response(body, latency_ms=_ms_since(start), ttft_ms=None)
 
-    async def _stream_once(self, client: httpx.AsyncClient, payload: dict, start: float) -> LLMResult:
+    async def _stream_once(
+        self,
+        client: httpx.AsyncClient,
+        payload: dict,
+        start: float,
+        *,
+        on_delta: Callable[[str], None] | None = None,
+    ) -> LLMResult:
         content_parts: list[str] = []
         reasoning_parts: list[str] = []
         tool_calls: dict[int, dict] = {}
@@ -110,6 +132,8 @@ class OpenAICompatProvider(BaseProvider):
                     delta = choice.get("delta") or {}
                     if delta.get("content"):
                         content_parts.append(delta["content"])
+                        if on_delta is not None:
+                            on_delta("".join(content_parts))
                     reasoning_chunk = delta.get("reasoning_content") or delta.get("reasoning")
                     if reasoning_chunk:
                         reasoning_parts.append(str(reasoning_chunk))

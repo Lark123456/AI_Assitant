@@ -27,7 +27,7 @@ class MobileAdapter(ChannelAdapter):
         can_push_unsolicited=False,
         can_update_message=False,
         supports_buttons=False,
-        streaming=False,
+        streaming=True,  # 手机端通过 SSE 拉流；不代表 adapter 主动推送
     )
 
     async def start(self, on_event: Callable[[InboundEvent], Any]) -> None:

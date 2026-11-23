@@ -2,6 +2,7 @@
 
 import json
 import uuid
+from collections.abc import Callable
 from typing import Any
 
 from pydantic import BaseModel, ValidationError
@@ -59,6 +60,7 @@ class LLMGateway:
         response_model: type[BaseModel] | None = None,
         trace_id: str = "",
         user_id: uuid.UUID | None = None,
+        on_delta: Callable[[str], None] | None = None,
     ) -> LLMResult:
         """按别名调用模型；response_model 校验失败时最多修复重试 2 次。"""
         if self._daily_limit > 0 and user_id is not None:
@@ -73,12 +75,14 @@ class LLMGateway:
         work_messages = list(messages)
         result: LLMResult | None = None
         if response_model is None:
-            result = await self._call_and_log(alias, provider, cfg, work_messages, tools, trace_id, user_id)
+            result = await self._call_and_log(
+                alias, provider, cfg, work_messages, tools, trace_id, user_id, on_delta
+            )
         else:
             error: str | None = None
             for _attempt in range(MAX_REPAIR_ATTEMPTS + 1):
                 result = await self._call_and_log(
-                    alias, provider, cfg, work_messages, tools, trace_id, user_id
+                    alias, provider, cfg, work_messages, tools, trace_id, user_id, on_delta
                 )
                 parsed, error = _validate_structured(result.content, response_model)
                 if parsed is not None:
@@ -128,13 +132,23 @@ class LLMGateway:
         tools: list[dict] | None,
         trace_id: str,
         user_id: uuid.UUID | None,
+        on_delta: Callable[[str], None] | None = None,
     ) -> LLMResult:
         error: str | None = None
         result: LLMResult | None = None
         try:
-            result = await provider.complete(
-                model=cfg.model, messages=messages, tools=tools, params=cfg.params
-            )
+            if on_delta is None:
+                result = await provider.complete(
+                    model=cfg.model, messages=messages, tools=tools, params=cfg.params
+                )
+            else:
+                result = await provider.complete(
+                    model=cfg.model,
+                    messages=messages,
+                    tools=tools,
+                    params=cfg.params,
+                    on_delta=on_delta,
+                )
         except Exception as exc:  # 记录后原样上抛，不吞异常
             error = f"{type(exc).__name__}: {exc}"
             await self._write_llm_call(alias, cfg, provider, messages, tools, trace_id, user_id, None, error)

@@ -3,6 +3,7 @@
 import json
 import time
 import uuid
+from collections.abc import Callable
 
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -52,6 +53,7 @@ class FridayAgent:
         source_event_id: uuid.UUID | None,
         text: str,
         embedder: EmbeddingService | None = None,
+        on_delta: Callable[[str], None] | None = None,
     ) -> str:
         """处理一条用户消息，返回回复文本。"""
         ctx = ToolContext(
@@ -131,6 +133,7 @@ class FridayAgent:
                     tools=tool_schemas(),
                     trace_id=trace_id,
                     user_id=user.id,
+                    on_delta=on_delta,
                 )
             except BudgetExceededError:
                 logger.warning("llm daily limit reached: user_id=%s trace_id=%s", user.id, trace_id)

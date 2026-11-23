@@ -91,15 +91,16 @@ async def _check_whitelist(
         raise HTTPException(status_code=403, detail="用户不在白名单")
 
 
-async def get_mobile_user(
-    request: Request,
-    session: Annotated[AsyncSession, Depends(get_session)],
-    x_butler_user: Annotated[str | None, Header(alias="X-Butler-User")] = None,
+async def resolve_mobile_user(
+    session: AsyncSession, request: Request, raw_header: str | None
 ) -> User:
-    """开发期用户识别：UUID 优先，其次按渠道外部 id 查找，并执行白名单。"""
-    if not x_butler_user or not x_butler_user.strip():
+    """开发期用户识别：UUID 优先，其次按渠道外部 id 查找，并执行白名单。
+
+    独立函数供 SSE 等长连接使用短生命周期 session，避免连接被响应长期占用。
+    """
+    if not raw_header or not raw_header.strip():
         raise HTTPException(status_code=401, detail="缺少 X-Butler-User")
-    raw = x_butler_user.strip()
+    raw = raw_header.strip()
     value = raw.removeprefix("feishu:")
 
     user: User | None = None
@@ -125,6 +126,15 @@ async def get_mobile_user(
         session, user, _settings(request), external_id=matched_external_id
     )
     return user
+
+
+async def get_mobile_user(
+    request: Request,
+    session: Annotated[AsyncSession, Depends(get_session)],
+    x_butler_user: Annotated[str | None, Header(alias="X-Butler-User")] = None,
+) -> User:
+    """FastAPI 依赖入口：复用 resolve_mobile_user。"""
+    return await resolve_mobile_user(session, request, x_butler_user)
 
 
 async def require_idempotency_key(

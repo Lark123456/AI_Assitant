@@ -137,10 +137,18 @@ class FakeProvider(BaseProvider):
         self.calls: list[list[dict]] = []
 
     async def complete(
-        self, *, model: str, messages: list[dict], tools: list[dict] | None, params: dict
+        self,
+        *,
+        model: str,
+        messages: list[dict],
+        tools: list[dict] | None,
+        params: dict,
+        on_delta: Callable[[str], None] | None = None,
     ) -> LLMResult:
         self.calls.append([dict(m) for m in messages])
         result = self._responder(messages)
+        if on_delta is not None and result.content:
+            on_delta(result.content)
         return LLMResult(
             content=result.content,
             tool_calls=result.tool_calls,

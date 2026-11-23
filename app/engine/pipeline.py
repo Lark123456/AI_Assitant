@@ -28,6 +28,7 @@ from app.core.logging import get_logger, log_context
 from app.db.models import EventLog, InboundProcessing, User
 from app.embeddings.service import EmbeddingService
 from app.engine.events import append_event
+from app.engine.streaming import ChatStreamBroker
 from app.engine.users import get_or_create_user
 from app.llm.gateway import LLMGateway
 
@@ -62,12 +63,14 @@ class InboundPipeline:
         gateway: LLMGateway,
         adapters: dict[str, ChannelAdapter],
         embedder: EmbeddingService | None = None,
+        stream_broker: ChatStreamBroker | None = None,
     ) -> None:
         self._sessionmaker = sessionmaker
         self._clock = clock
         self._settings = settings
         self._adapters = adapters
         self._embedder = embedder
+        self._stream_broker = stream_broker
         self._friday = FridayAgent(gateway)
         self._allowed_open_ids = {
             x.strip() for x in settings.allowed_open_ids.split(",") if x.strip()
@@ -181,6 +184,8 @@ class InboundPipeline:
             await self._process_one(ingested)
         except Exception as exc:
             logger.exception("inbound processing crashed: event_id=%s", ingested.event_id)
+            if ingested.event.channel == "mobile" and self._stream_broker is not None:
+                self._stream_broker.fail(ingested.event_id)
             await self._mark_status(
                 ingested.event_id,
                 "failed",
@@ -191,6 +196,14 @@ class InboundPipeline:
         with log_context(trace_id=ingested.trace_id, user_id=str(ingested.user_id)):
             adapter = self._adapters[ingested.event.channel]
             is_mobile = ingested.event.channel == "mobile"
+            if is_mobile and self._stream_broker is not None:
+                # 先建立空流，早到的 SSE 订阅可以等待首个增量。
+                self._stream_broker.open(ingested.event_id)
+
+            def emit_delta(text: str) -> None:
+                if is_mobile and self._stream_broker is not None:
+                    self._stream_broker.publish(ingested.event_id, text)
+
             # 事务 A：agent + 工具写入。先短读用户并 commit 释放连接，再进 LLM 循环，
             # 避免第一次模型调用期间持有事务。
             async with self._sessionmaker() as session:
@@ -210,6 +223,7 @@ class InboundPipeline:
                         source_event_id=ingested.event_id,
                         text=ingested.event.text,
                         embedder=self._embedder,
+                        on_delta=emit_delta if is_mobile else None,
                     )
                 except Exception:
                     # 故障兜底：回滚事务（丢弃半途写入），回复兜底文案而非沉默
@@ -220,10 +234,24 @@ class InboundPipeline:
                     # 手机安全完成路径：回复、工具写入与 done 同一事务提交。
                     # 中途崩溃则整体回滚，recovery 重跑不会留下半成品；
                     # 这里不调用 MobileAdapter.send，也不写 send_ok。
-                    if reply:
+                    outbound = (
                         await self._append_mobile_reply(session, ingested, reply)
+                        if reply
+                        else None
+                    )
                     await self._apply_status(session, ingested.event_id, "done")
                     await session.commit()
+                    if self._stream_broker is not None:
+                        self._stream_broker.finish(
+                            ingested.event_id,
+                            text=reply or "",
+                            reply_id=str(outbound.id) if outbound is not None else None,
+                            occurred_at=(
+                                outbound.occurred_at.isoformat()
+                                if outbound is not None
+                                else None
+                            ),
+                        )
                     return
                 await session.commit()
 
@@ -273,13 +301,13 @@ class InboundPipeline:
 
     async def _append_mobile_reply(
         self, session: AsyncSession, ingested: IngestedEvent, reply: str
-    ) -> None:
-        """手机回复的唯一写入点；与 done 同事务提交。
+    ) -> EventLog:
+        """手机回复的唯一写入点；与 done 同事务提交，返回 outbound 事件行。
 
         幂等键 mobile-reply:{event_id} 保证同一入站事件最多一条回复；
         payload 用 delivery="persisted" 表示“已落库、可供 App 轮询”，不使用 send_ok。
         """
-        await append_event(
+        row, _ = await append_event(
             session,
             user_id=ingested.user_id,
             channel="mobile",
@@ -295,6 +323,7 @@ class InboundPipeline:
             clock=self._clock,
             idempotency_key=f"mobile-reply:{ingested.event_id}",
         )
+        return row
 
     async def recover_unfinished(self) -> int:
         """启动补处理：重放状态仍为 processing 的入站事件（工具幂等键保证不重复写）。
