@@ -164,9 +164,17 @@ adb reverse tcp:8000 tcp:8000
 - API 服务只支持单进程（同一用户的串行锁是进程内 `asyncio.Lock`）；多 worker/多副本需要跨进程队列或租约。
 - 手机没有服务端推送：Friday 回复落库后由 App 轮询取回，状态为 `available`（不是 `sent`）。
 
+## 任务页（U2）
+
+- `GET /api/mobile/tasks?status=open|done|all&limit=100`：返回当前用户 `type=item` 的任务，`upcomingBlock` 取最早的未来计划块。
+- 状态映射：`active→open`、`done→done`、`dropped→skipped`。
+- 写操作复用 Today 端点：`POST /api/mobile/today/items/{id}/complete|skip|restore`、`POST /api/mobile/today/tasks/{id}/schedule`；写接口必须带 `Idempotency-Key`。
+- 任务页支持未完成/已完成/全部过滤、下拉刷新、完成/跳过/撤销与“排进今天”；不提供创建/编辑。
+- 默认仍为 Mock；`USE_REMOTE=true` 时走真实接口。
+
 ## 验收状态
 
-- `analyze` / `format` / `test` / `build apk --debug`：通过（122 项测试；3 项截图生成测试默认跳过）
+- `analyze` / `format` / `test` / `build apk --debug`：通过（130 项测试；3 项截图生成测试默认跳过）
 - APK SDK：`sdkVersion 26`、`targetSdkVersion 36`
 - 应用名：`Butler`（Android label；包名仍为 `com.butler.mobile`）
 - 最新 Debug APK：`build/app/outputs/flutter-apk/app-debug.apk`

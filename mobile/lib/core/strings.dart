@@ -7,6 +7,13 @@ abstract final class S {
   static const tabTasks = '任务';
   static const tabProfile = '我的';
 
+  static const tasksSubtitle = '所有任务 · 与对话同步';
+  static const tasksEmpty = '还没有任务';
+  static const taskOpen = '未完成';
+  static const taskFilterDone = '已完成';
+  static const taskFilterAll = '全部';
+  static const taskUpcoming = '下一个安排';
+
   static const greetingDawn = '夜深了';
   static const greetingMorning = '早上好';
   static const greetingNoon = '中午好';
@@ -41,7 +48,6 @@ abstract final class S {
   static const readOnlyMode = '只读模式：真实数据已接入，修改操作将在下一批开放';
 
   static const placeholderBody = '这一页将在后续批次实现';
-  static const tasksNextStage = '任务页将在下一阶段提供';
   static const profileNextStage = '我的页将在下一阶段提供';
 
   static const markDone = '完成';

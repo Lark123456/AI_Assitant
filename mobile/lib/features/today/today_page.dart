@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/clock.dart';
 import '../../core/format.dart';
 import '../../core/providers.dart';
+import '../../core/schedule_time.dart';
 import '../../core/strings.dart';
 import '../../core/theme/tokens.dart';
 import '../../domain/enums.dart';
@@ -39,28 +40,6 @@ String formatItemTime(TodayItem item) {
     return '${formatClockTime(start)}–${formatClockTime(item.end!)}';
   }
   return formatClockTime(start);
-}
-
-/// 未排期任务的可排期开始时间；过去日期或当天已无可用时段时返回 null。
-DateTime? nextScheduleStart(DateTime now, DateTime day) {
-  final target = DateTime(day.year, day.month, day.day);
-  final today = DateTime(now.year, now.month, now.day);
-  if (target.isBefore(today)) return null;
-  if (target.isAfter(today)) {
-    return DateTime(day.year, day.month, day.day, 18);
-  }
-
-  final evening = DateTime(now.year, now.month, now.day, 18);
-  final earliest = now.add(const Duration(minutes: 5));
-  final earliestDay = DateTime(earliest.year, earliest.month, earliest.day);
-  if (!earliestDay.isAtSameMomentAs(today)) return null;
-  if (evening.isAfter(earliest)) return evening;
-
-  final totalMinutes = earliest.hour * 60 + earliest.minute;
-  final roundedMinutes = ((totalMinutes + 29) ~/ 30) * 30;
-  // 最晚允许 23:00 开始，避免默认 60 分钟的块跨过午夜。
-  if (roundedMinutes > 23 * 60) return null;
-  return earliestDay.add(Duration(minutes: roundedMinutes));
 }
 
 class TodayPage extends ConsumerStatefulWidget {

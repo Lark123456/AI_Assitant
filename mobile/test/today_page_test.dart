@@ -4,6 +4,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:intl/date_symbol_data_local.dart';
 import 'package:mobile/core/clock.dart';
 import 'package:mobile/core/providers.dart';
+import 'package:mobile/core/schedule_time.dart';
 import 'package:mobile/core/strings.dart';
 import 'package:mobile/core/theme/app_theme.dart';
 import 'package:mobile/data/mock/mock_network_status_source.dart';

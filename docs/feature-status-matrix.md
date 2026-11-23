@@ -11,7 +11,7 @@
 - 后端 P0 阶段 1–3b 的主体机制已经落地：飞书渠道、Friday 工具调用、提醒/简报/主动消息、LLM 网关与审计、记忆写入与检索。
 - 记忆检索注入代码已完成，但 `MEMORY_INJECT_ENABLED` 默认关闭，当前 `.env` 未开启；线上 Friday 还不会主动使用长期记忆。
 - Jarvis 慢通道仍是零代码：只有 `work_item` 层级字段、`assigned_by=jarvis` 枚举和模型别名预留。
-- Mobile U1 已完成；默认仍使用 Mock。U2 已接入 Today 读写与 Chat（发送/历史/单条状态，手机与飞书/Console 历史隔离）；任务页/我的页、系统通知、真实流式、同步协议、多会话与 Jarvis 专题仍未开始。
+- Mobile U1 已完成；默认仍使用 Mock。U2 已接入 Today 读写、Chat 与任务页（列表与状态操作）；我的页、系统通知、真实流式、同步协议、多会话与 Jarvis 专题仍未开始。
 
 ## 二、阶段完成度与口径
 
@@ -25,7 +25,7 @@
 | 阶段 3b | 记忆读取与 prompt 注入 | 部分完成：代码完成，默认关闭；`confirmed` 升级与确认交互未做 |
 | 阶段 4 | Jarvis 慢通道、长期任务、重规划、周复盘、任务专属记忆 | 未开始 |
 | Mobile U1 | Flutter Mock 版：外壳、今日页、对话页、调试面板 | 基本完成；真机验收待补 |
-| Mobile U2 | 真实后端接入、任务/我的页、通知 | 进行中：Today 读写与 Chat 已接入；任务页/我的页/通知/真实流式未接 |
+| Mobile U2 | 真实后端接入、任务/我的页、通知 | 进行中：Today 读写、Chat 与任务页已接入；我的页/通知/真实流式未接 |
 | Mobile U3 | 同步协议、多会话与 Jarvis 专题 | 未开始 |
 
 ### 2.2 阶段口径
@@ -116,11 +116,11 @@
 | 调试面板：模拟时间、网络、数据集、主题、文字缩放、发送失败 | 已实现，debug 下长按今日页标题进入（[debug_panel_page.dart](../mobile/lib/features/debug/debug_panel_page.dart)、[debug_panel_test.dart](../mobile/test/debug_panel_test.dart)） | 已完成 | 无 |
 | Mock 仓库与 Provider 装配：简单 Stream、模拟延迟、离线队列、错误注入 | 已实现；Provider 层只暴露接口，features 不直接 import data/mock（[providers.dart](../mobile/lib/core/providers.dart)、[mock_chat_repository.dart](../mobile/lib/data/mock/mock_chat_repository.dart)） | 已完成 | 无 |
 | 真实后端接入、真实流式、数据库读写 | Today 与 Chat 均已接真实 API：`RemoteTodayRepository` 与 `RemoteChatRepository`，通过 `USE_REMOTE=true` 开启；Remote 模式暂不支持卡片应答与流式（[remote_today_repository.dart](../mobile/lib/data/remote/remote_today_repository.dart)、[remote_chat_repository.dart](../mobile/lib/data/remote/remote_chat_repository.dart)、[providers.dart](../mobile/lib/core/providers.dart)） | 部分实现 | 真实流式、任务页/通知 |
-| 任务页/我的页内容 | 当前只有占位页 | 未实现 | Mobile U2 |
+| 任务页/我的页内容 | 任务页已实现：列表（未完成/已完成/全部）、完成/跳过/撤销、排进今天；写操作复用 Today 接口（[tasks_page.dart](../mobile/lib/features/tasks/tasks_page.dart)、[mobile_tasks.py](../app/api/routes/mobile_tasks.py)）。我的页仍为占位页 | 部分实现 | 我的页下一批 |
 | 系统通知、后台推送、通知权限 | 未实现，U1 明确不做 | 未实现 | Mobile U2/U3 |
 | 会话同步协议、多会话、Jarvis 专题、邀请卡幂等、PriorityAlert | 已从 U1 移出并归档，待后端接口方案确定（[mobile-sync-and-topics.md](./deferred/mobile-sync-and-topics.md)） | 未实现 | Mobile U3 |
 | 截图归档与真机验收 | 6 张浅/深色组件渲染截图已生成；真机安装验收待执行（[README.md](../mobile/README.md)、[screenshots](../mobile/screenshots)） | 部分实现 | U1 收尾 |
-| 单元/组件/对比度/缩放测试，analyze/format/test/build apk | 122 项测试通过（3 项截图生成测试默认跳过）；四条命令已通过（[README.md](../mobile/README.md)） | 已完成 | 无 |
+| 单元/组件/对比度/缩放测试，analyze/format/test/build apk | 130 项测试通过（3 项截图生成测试默认跳过）；四条命令已通过（[README.md](../mobile/README.md)） | 已完成 | 无 |
 
 ### 3.7 多模态与平台化
 

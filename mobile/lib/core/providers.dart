@@ -2,12 +2,15 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../data/mock/mock_chat_repository.dart';
 import '../data/mock/mock_network_status_source.dart';
+import '../data/mock/mock_task_repository.dart';
 import '../data/mock/mock_today_repository.dart';
 import '../data/remote/api_client.dart';
 import '../data/remote/remote_chat_repository.dart';
+import '../data/remote/remote_task_repository.dart';
 import '../data/remote/remote_today_repository.dart';
 import '../domain/enums.dart';
 import '../domain/repositories/chat_repository.dart';
+import '../domain/repositories/task_repository.dart';
 import '../domain/repositories/today_repository.dart';
 import 'clock.dart';
 import 'debug.dart';
@@ -84,6 +87,14 @@ final todayRepositoryProvider = Provider<TodayRepository>((ref) {
       DebugDataset.error => MockTodayDataset.error,
     },
   );
+});
+
+final taskRepositoryProvider = Provider<TaskRepository>((ref) {
+  final remote = ref.watch(remoteConfigProvider);
+  if (remote.enabled) {
+    return RemoteTaskRepository(client: ref.watch(apiClientProvider));
+  }
+  return MockTaskRepository(clock: ref.watch(clockProvider));
 });
 
 /// 调试动作集中在这里，避免 features 直接依赖 data/mock。
