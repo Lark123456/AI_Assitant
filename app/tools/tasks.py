@@ -1,8 +1,8 @@
-"""work_item 工具：create_task / list_tasks / complete_task。阶段 1 只用 type=item。"""
+"""work_item 工具：create_task / list_tasks / complete_task / update_task。阶段 1 只用 type=item。"""
 
 import uuid
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -21,6 +21,18 @@ class ListTasksArgs(BaseModel):
 
 class CompleteTaskArgs(BaseModel):
     task_id: str = Field(min_length=1)
+
+
+class UpdateTaskArgs(BaseModel):
+    task_id: str = Field(min_length=1, description="要修改的任务 id")
+    title: str | None = Field(default=None, min_length=1, max_length=500)
+    description: str | None = Field(default=None, min_length=1, max_length=2000)
+
+    @model_validator(mode="after")
+    def _check_fields(self) -> "UpdateTaskArgs":
+        if self.title is None and self.description is None:
+            raise ValueError("title 与 description 至少提供一个")
+        return self
 
 
 async def _run_create_task(ctx: ToolContext, args: dict) -> ToolResult:
@@ -93,6 +105,42 @@ async def _run_complete_task(ctx: ToolContext, args: dict) -> ToolResult:
     )
 
 
+async def _run_update_task(ctx: ToolContext, args: dict) -> ToolResult:
+    """只修改标题/描述，不改状态，也不新建任务。"""
+    parsed = UpdateTaskArgs.model_validate(args)
+    try:
+        task_id = uuid.UUID(parsed.task_id)
+    except ValueError:
+        return ToolResult(status="error", message="task_id 不是合法 UUID")
+    item = (
+        await ctx.session.execute(
+            select(WorkItem).where(
+                WorkItem.id == task_id,
+                WorkItem.user_id == ctx.user.id,
+            )
+        )
+    ).scalar_one_or_none()
+    if item is None:
+        return ToolResult(status="error", message=f"任务不存在：{parsed.task_id}")
+    if parsed.title is not None:
+        item.title = parsed.title
+    if parsed.description is not None:
+        item.description = parsed.description
+    item.rev += 1
+    item.updated_at = ctx.clock.now()
+    await ctx.session.flush()
+    return ToolResult(
+        status="ok",
+        data={
+            "task_id": str(item.id),
+            "title": item.title,
+            "description": item.description,
+            "status": item.status,
+        },
+        message="任务已更新",
+    )
+
+
 CREATE_TASK = ToolDef(
     name="create_task",
     description="创建一个任务。写操作，幂等键由系统按入站事件派生。",
@@ -113,5 +161,13 @@ COMPLETE_TASK = ToolDef(
     description="把指定任务标记为完成。写操作，幂等键由系统按入站事件派生。",
     args_model=CompleteTaskArgs,
     run=_run_complete_task,
+    write=True,
+)
+
+UPDATE_TASK = ToolDef(
+    name="update_task",
+    description="修改任务的标题或描述（不改变状态，也不新建任务）。写操作，幂等键由系统按入站事件派生。",
+    args_model=UpdateTaskArgs,
+    run=_run_update_task,
     write=True,
 )

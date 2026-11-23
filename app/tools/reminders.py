@@ -1,10 +1,10 @@
-"""set_reminder / list_reminders / cancel_reminder 工具。"""
+"""set_reminder / list_reminders / cancel_reminder / update_reminder 工具。"""
 
 import datetime as dt
 import uuid
 from zoneinfo import ZoneInfo
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from sqlalchemy import select
 
 from app.db.models import TriggerInstance
@@ -26,6 +26,20 @@ class ListRemindersArgs(BaseModel):
 
 class CancelReminderArgs(BaseModel):
     trigger_id: str = Field(min_length=1, description="提醒的 trigger_id")
+
+
+class UpdateReminderArgs(BaseModel):
+    trigger_id: str = Field(min_length=1, description="提醒的 trigger_id")
+    fire_at: str | None = Field(
+        default=None, description="新的触发时刻，ISO 8601 带时区偏移，必须是未来时间"
+    )
+    note: str | None = Field(default=None, min_length=1, max_length=500)
+
+    @model_validator(mode="after")
+    def _check_fields(self) -> "UpdateReminderArgs":
+        if self.fire_at is None and self.note is None:
+            raise ValueError("fire_at 与 note 至少提供一个")
+        return self
 
 
 async def _run_set_reminder(ctx: ToolContext, args: dict) -> ToolResult:
@@ -139,11 +153,88 @@ async def _run_cancel_reminder(ctx: ToolContext, args: dict) -> ToolResult:
     )
 
 
+async def _run_update_reminder(ctx: ToolContext, args: dict) -> ToolResult:
+    """原地修改 pending 提醒；行锁保证不与 worker 领取竞争，trigger id 不变。"""
+    parsed = UpdateReminderArgs.model_validate(args)
+    try:
+        trigger_uuid = uuid.UUID(parsed.trigger_id)
+    except ValueError:
+        return ToolResult(status="error", message="trigger_id 不是合法 UUID")
+    trigger = (
+        await ctx.session.execute(
+            select(TriggerInstance)
+            .where(
+                TriggerInstance.id == trigger_uuid,
+                TriggerInstance.user_id == ctx.user.id,
+                TriggerInstance.kind == "reminder",
+            )
+            .with_for_update()
+        )
+    ).scalar_one_or_none()
+    if trigger is None:
+        return ToolResult(status="error", message=f"提醒不存在：{parsed.trigger_id}")
+    if trigger.status != "pending":
+        return ToolResult(
+            status="error",
+            message=f"提醒当前状态为 {trigger.status}，已被处理，无法修改",
+        )
+
+    if parsed.fire_at is not None:
+        fire_at = parse_future_time(parsed.fire_at, ctx.clock)
+        trigger.fire_at = fire_at
+        trigger.expires_at = fire_at + dt.timedelta(
+            hours=ctx.settings.reminder_late_window_hours
+        )
+    else:
+        fire_at = trigger.fire_at
+    if parsed.note is not None:
+        trigger.payload = {**(trigger.payload or {}), "note": parsed.note}
+    await append_event(
+        ctx.session,
+        user_id=ctx.user.id,
+        channel=ctx.channel,
+        direction="system",
+        type="trigger",
+        payload={
+            "trigger_id": str(trigger.id),
+            "status": "updated",
+            "reason": "user_updated",
+        },
+        trace_id=ctx.trace_id,
+        clock=ctx.clock,
+        idempotency_key=(
+            f"reminder-updated:{trigger.id}:{ctx.source_event_id}:{ctx.call_index}"
+        ),
+    )
+    await ctx.session.flush()
+    return ToolResult(
+        status="ok",
+        data={
+            "trigger_id": str(trigger.id),
+            "fire_at": fire_at.astimezone(ZoneInfo(ctx.user.timezone)).isoformat(),
+            "note": str((trigger.payload or {}).get("note", "")),
+            "status": trigger.status,
+        },
+        message="提醒已更新",
+    )
+
+
 LIST_REMINDERS = ToolDef(
     name="list_reminders",
     description="列出尚未触发的提醒。",
     args_model=ListRemindersArgs,
     run=_run_list_reminders,
+)
+
+UPDATE_REMINDER = ToolDef(
+    name="update_reminder",
+    description=(
+        "修改一条尚未触发的提醒的时间或备注；直接更新原提醒，不取消重建。"
+        "写操作，幂等键由系统按入站事件派生。"
+    ),
+    args_model=UpdateReminderArgs,
+    run=_run_update_reminder,
+    write=True,
 )
 
 CANCEL_REMINDER = ToolDef(

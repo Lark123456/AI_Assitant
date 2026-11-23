@@ -19,11 +19,16 @@ from app.tools.blocks import (
     SCHEDULE_BLOCK,
     UPDATE_BLOCK_STATUS,
 )
-from app.tools.notes import CAPTURE_NOTE
+from app.tools.notes import CAPTURE_NOTE, LIST_NOTES
 from app.tools.prefs import SET_NOTIF_PREFS
 from app.tools.remember import REMEMBER
-from app.tools.reminders import CANCEL_REMINDER, LIST_REMINDERS, SET_REMINDER
-from app.tools.tasks import COMPLETE_TASK, CREATE_TASK, LIST_TASKS
+from app.tools.reminders import (
+    CANCEL_REMINDER,
+    LIST_REMINDERS,
+    SET_REMINDER,
+    UPDATE_REMINDER,
+)
+from app.tools.tasks import COMPLETE_TASK, CREATE_TASK, LIST_TASKS, UPDATE_TASK
 from app.tools.timezone import SET_TIMEZONE
 
 TOOLS: dict[str, ToolDef] = {
@@ -32,10 +37,13 @@ TOOLS: dict[str, ToolDef] = {
         CREATE_TASK,
         LIST_TASKS,
         COMPLETE_TASK,
+        UPDATE_TASK,
         SET_REMINDER,
         LIST_REMINDERS,
         CANCEL_REMINDER,
+        UPDATE_REMINDER,
         CAPTURE_NOTE,
+        LIST_NOTES,
         SET_TIMEZONE,
         SCHEDULE_BLOCK,
         LIST_SCHEDULE,

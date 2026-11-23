@@ -209,11 +209,20 @@ async def _run_update_block_status(ctx: ToolContext, args: dict) -> ToolResult:
 
 
 async def _run_reschedule_block(ctx: ToolContext, args: dict) -> ToolResult:
+    """改期规则与移动端 Today 保持一致。
+
+    - 只允许 planned 状态的块（done/skipped/moved 拒绝）；
+    - 不允许跨本地日期；
+    - 新时长不得少于 5 分钟；
+    - 与 Today 一致，允许把当天已逾期的块修正到过去时刻（不要求未来时间）。
+    """
     parsed = RescheduleBlockArgs.model_validate(args)
-    starts = parse_future_time(parsed.starts_at, ctx.clock)
+    starts = parse_iso_with_offset(parsed.starts_at)
     ends = parse_iso_with_offset(parsed.ends_at)
     if ends <= starts:
         return ToolResult(status="error", message="结束时间必须晚于开始时间")
+    if ends - starts < dt.timedelta(minutes=5):
+        return ToolResult(status="error", message="改期后时长不能少于 5 分钟")
     block_uuid = _uuid_or_error(parsed.block_id)
     if block_uuid is None:
         return ToolResult(status="error", message="block_id 不是合法 UUID")
@@ -226,6 +235,14 @@ async def _run_reschedule_block(ctx: ToolContext, args: dict) -> ToolResult:
     ).scalar_one_or_none()
     if block is None:
         return ToolResult(status="error", message=f"时间块不存在：{parsed.block_id}")
+    if block.status != "planned":
+        return ToolResult(
+            status="error",
+            message=f"只有未结束的日程块可以改期（当前状态：{block.status}）",
+        )
+    tz = ZoneInfo(ctx.user.timezone)
+    if starts.astimezone(tz).date() != block.starts_at.astimezone(tz).date():
+        return ToolResult(status="error", message="改期不能跨天")
     block.starts_at = starts
     block.ends_at = ends
     block.status = "planned"
