@@ -179,9 +179,16 @@ adb reverse tcp:8000 tcp:8000
 - `dayStart` 仅作资料展示；Today 当前按本地零点切日。
 - 默认仍为 Mock；`USE_REMOTE=true` 时走真实接口。
 
+## 应用内提醒（U2）
+
+- `GET /api/mobile/reminders/due?graceMinutes=30&limit=20`：返回 `fire_at` 在最近 30 分钟内、未过期且状态为 pending/claimed/fired 的提醒。
+- 仅 Remote 模式启用：App 前台每 30 秒轮询一次；进入后台或退出时停止。
+- Shell 级横幅在任意 Tab 可见；同一 trigger 本会话只提示一次，“知道了”仅本地隐藏，不写后端 ack。
+- 不实现 OS 通知、后台推送、通知权限与 APNs/FCM（U2 明确边界）。
+
 ## 验收状态
 
-- `analyze` / `format` / `test` / `build apk --debug`：通过（135 项测试；3 项截图生成测试默认跳过）
+- `analyze` / `format` / `test` / `build apk --debug`：通过（140 项测试；3 项截图生成测试默认跳过）
 - APK SDK：`sdkVersion 26`、`targetSdkVersion 36`
 - 应用名：`Butler`（Android label；包名仍为 `com.butler.mobile`）
 - 最新 Debug APK：`build/app/outputs/flutter-apk/app-debug.apk`

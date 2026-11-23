@@ -27,6 +27,8 @@ abstract final class S {
   static const profileVersion = '版本';
   static const profileDebug = '调试面板';
 
+  static const reminderDueTitle = '到点提醒';
+
   static const greetingDawn = '夜深了';
   static const greetingMorning = '早上好';
   static const greetingNoon = '中午好';
