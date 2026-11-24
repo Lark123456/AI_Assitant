@@ -1,7 +1,7 @@
 # Butler 功能对照表
 
 > 核对日期：2026-11-24  
-> 代码基线：`master`（U2-B 完成）  
+> 代码基线：`master`（U2-B + 阶段 3b 收尾完成）  
 > 口径：以已确认的契约与执行计划为准，对照当前代码、测试与运行配置。  
 > 依据：[contracts.md](./contracts.md)、[system-guide.md](./system-guide.md)、[mobile-u1-plan.md](./mobile-u1-plan.md)、[deferred/mobile-sync-and-topics.md](./deferred/mobile-sync-and-topics.md)、代码与测试。  
 > 说明：`system-guide.md` 第二节的能力清单停留在阶段 3a，本表以当前代码为准；两者冲突时以本表与 `contracts.md` 为准。
@@ -9,9 +9,9 @@
 ## 一、结论摘要
 
 - 后端 P0 阶段 1–3b 的主体机制已经落地：飞书渠道、Friday 工具调用、提醒/简报/主动消息、LLM 网关与审计、记忆写入与检索。
-- 记忆检索注入代码已完成，但 `MEMORY_INJECT_ENABLED` 默认关闭，当前 `.env` 未开启；线上 Friday 还不会主动使用长期记忆。
+- 记忆检索注入默认开启（`MEMORY_INJECT_ENABLED=true`）；槽位冲突会生成 pending 记忆，并通过手机聊天卡片逐条确认后升级为 `confirmed`。
 - Jarvis 慢通道仍是零代码：只有 `work_item` 层级字段、`assigned_by=jarvis` 枚举和模型别名预留。
-- Mobile U1 已完成；默认仍使用 Mock。U2 已接入 Today 读写、Chat（含 SSE 流式）、任务页、我的页（只读资料）与应用内提醒；OS 通知/推送、同步协议、多会话与 Jarvis 专题仍未开始。
+- Mobile U1 已完成；默认仍使用 Mock。U2 已接入 Today 读写、Chat（含 SSE 流式与记忆确认卡片）、任务页、我的页（只读资料）与应用内提醒；OS 通知/推送、同步协议、多会话与 Jarvis 专题仍未开始。
 
 ## 二、阶段完成度与口径
 
@@ -22,19 +22,19 @@
 | 阶段 1 | 飞书长连接、Friday 工具调用、trigger 状态机、LLM 网关、幂等与审计 | 已完成 |
 | 阶段 2 | 日程块、晨间/晚间简报、主动消息仲裁、物化器 | 已完成 |
 | 阶段 3a | 记忆写入管线：异步抽取、校验、裁决、决策日志、评测 | 已完成 |
-| 阶段 3b | 记忆读取与 prompt 注入 | 部分完成：代码完成，默认关闭；`confirmed` 升级与确认交互未做 |
+| 阶段 3b | 记忆读取与 prompt 注入 | 已完成：默认开启；`confirmed` 升级与手机确认卡片已实现 |
 | 阶段 4 | Jarvis 慢通道、长期任务、重规划、周复盘、任务专属记忆 | 未开始 |
 | Mobile U1 | Flutter Mock 版：外壳、今日页、对话页、调试面板 | 基本完成；真机验收待补 |
-| Mobile U2 | 真实后端接入、任务/我的页、通知 | 进行中：Today/Chat（SSE 流式）/任务页/我的页/应用内提醒已接入；OS 通知未接 |
+| Mobile U2 | 真实后端接入、任务/我的页、通知 | 进行中：Today/Chat（SSE 流式 + 记忆确认卡片）/任务页/我的页/应用内提醒已接入；OS 通知未接 |
 | Mobile U3 | 同步协议、多会话与 Jarvis 专题 | 未开始 |
 
 ### 2.2 阶段口径
 
 | 阶段 | 含义 | 当前状态 |
 |---|---|---|
-| 阶段 3b 收尾 | 记忆确认升级 `confirmed`、确认交互、检索注入启用与实机验证 | 契约已预留，未完成 |
+| 阶段 3b 收尾 | 记忆确认升级 `confirmed`、确认交互、检索注入启用与实机验证 | 已完成代码与测试；实机验证随 Mobile 真机验收执行 |
 | 阶段 4 | Jarvis 慢通道、长期任务立项/拆解/规划、重规划、周复盘、任务专属记忆 | 契约仅预留任务专属记忆表，尚无正式计划 |
-| Mobile U2 | 真实后端接入、任务页/我的页、系统通知、真实流式 | 进行中：Today/Chat（SSE）/任务页/我的页/应用内提醒已落地；OS 通知与卡片应答未接 |
+| Mobile U2 | 真实后端接入、任务页/我的页、系统通知、真实流式 | 进行中：Today/Chat（SSE）/任务页/我的页/应用内提醒/记忆确认卡片已落地；OS 通知与其它卡片应答未接 |
 | Mobile U3 | 会话同步协议、多会话、Jarvis 专题、邀请幂等、PriorityAlert | 已归档到 deferred，待后端接口方案确定 |
 | 未排期 | 多模态、更多渠道、多租户、iOS/HarmonyOS | 未排期 |
 
@@ -86,10 +86,10 @@
 | 异步记忆抽取：slot / preference / episode，证据逐字回查 | 抽取器 v2.6；few-shot 与评测用例分离；131 条评测 0 失败（[extract.py](../app/memory/extract.py)、[memory_cases.yaml](../tests/evals/memory_cases.yaml)、[run_memory_evals.py](../scripts/run_memory_evals.py)） | 已完成 | 无 |
 | 确定性校验、规则裁决、LLM 兜底、决策日志 | 时间角色映射、scope 归一化/降级、冲突 ASK、supersede/NOOP 规则与 `memory_decision_log` 已实现（[validate.py](../app/memory/validate.py)、[resolve.py](../app/memory/resolve.py)） | 已完成 | 无 |
 | 敏感类别与提示注入拦截，异步路径一律拒绝 | 敏感类别默认拒绝；注入类与敏感类写入统计为 0（[test_pipeline_features.py](../tests/integration/test_pipeline_features.py)、[memory-policy.md](./memory-policy.md)） | 已完成 | 无 |
-| `remember` 同步写入，槽位冲突返回待确认并附旧值 | `remember` 工具已实现；冲突返回 `pending_confirmation`，但还没有确认卡片交互（[remember.py](../app/tools/remember.py)） | 部分实现 | 阶段 3b 收尾 |
-| 记忆读取：按相关性检索 slot / preference / episode，注入 Friday 提示词 | `retrieve.py` 已实现模型隔离向量检索、slot 有效期去重、预算裁剪、来源标注、超时降级与 `memory_context` 审计；测试覆盖（[retrieve.py](../app/memory/retrieve.py)、[test_friday_memory_injection.py](../tests/integration/test_friday_memory_injection.py)） | 部分实现 | 阶段 3b 收尾（启用并实机验证） |
-| 记忆检索默认开启 | `MEMORY_INJECT_ENABLED` 默认 `false`，当前 `.env` 未设置；运行中 Friday 不会注入长期记忆（[config.py](../app/core/config.py)） | 未实现 | 阶段 3b 收尾 |
-| 用户确认后把 `stated` 升级为 `confirmed`，提供确认摘要/卡片 | `source_class=confirmed` 只在权重与检索中预留；没有确认写入路径与确认卡片；Mobile 的 `MemoryConfirmCard` 仅为 Mock（[weights.py](../app/memory/weights.py)、[memory_confirm 卡片](../mobile/lib/domain/models/chat_message.dart)） | 未实现 | 阶段 3b 收尾 |
+| `remember` 同步写入，槽位冲突返回待确认并附旧值 | `remember` 工具已实现；冲突返回 `pending_confirmation`，并附 pending 记忆 id、subject、value、type、slot_key；旧记忆只累加 `contradict_count`，不降权（[remember.py](../app/tools/remember.py)、[pipeline.py](../app/memory/pipeline.py)） | 已完成 | 无 |
+| 记忆读取：按相关性检索 slot / preference / episode，注入 Friday 提示词 | `retrieve.py` 已实现模型隔离向量检索、slot 有效期去重、预算裁剪、来源标注、超时降级与 `memory_context` 审计；测试覆盖（[retrieve.py](../app/memory/retrieve.py)、[test_friday_memory_injection.py](../tests/integration/test_friday_memory_injection.py)） | 已完成 | 无 |
+| 记忆检索默认开启 | `MEMORY_INJECT_ENABLED` 默认 true，`.env.example` 同步为开启；显式设为 false 仍写审计但不注入（[config.py](../app/core/config.py)） | 已完成 | 无 |
+| 用户确认后把 `stated` 升级为 `confirmed`，提供确认摘要/卡片 | 新增 `decide_pending_memory`：确认后 pending → active、`source_class=confirmed`、weight=1.0 并 supersede 旧记忆；拒绝置 retracted；手机聊天写入 `card` 事件并提供 `card-actions` 接口，Flutter 逐条双按钮确认；测试覆盖状态机、Pipeline、API 与移动端（[confirm.py](../app/memory/confirm.py)、[mobile_chat.py](../app/api/routes/mobile_chat.py)、[test_memory_confirmation.py](../tests/integration/test_memory_confirmation.py)、[test_mobile_memory_card_api.py](../tests/integration/test_mobile_memory_card_api.py)） | 已完成 | 缺口：飞书卡片渲染仍为文本降级，确认入口当前只在手机端 |
 | 记忆中心/画像页，可查看、修改、删除长期记忆 | 无后端接口与移动端页面 | 未实现 | 未排期（记忆确认属阶段 3b） |
 | 记忆质量评测与门槛 | `memory-eval-v2`、131 条用例、precision/recall 1.0、错记 0、静默覆盖 0（[run_memory_evals.py](../scripts/run_memory_evals.py)、[memory_cases.yaml](../tests/evals/memory_cases.yaml)；历史 v2/v2.1 报告见 [memory-eval-report-v2.md](./memory-eval-report-v2.md)） | 已完成 | 无 |
 
@@ -111,16 +111,16 @@
 | Flutter 工程、设计令牌、浅/深色主题、7 组对比度 | 已实现（[tokens.dart](../mobile/lib/core/theme/tokens.dart)、[app_theme.dart](../mobile/lib/core/theme/app_theme.dart)、[color_contrast_test.dart](../mobile/test/color_contrast_test.dart)） | 已完成 | 无 |
 | 4 Tab 导航外壳：`/today`、`/chat`、`/tasks`、`/profile`，切换保留状态 | `StatefulShellRoute.indexedStack` 已实现；四个 Tab 均有实际页面，切换保留状态（[app_router.dart](../mobile/lib/shell/app_router.dart)、[shell_scaffold.dart](../mobile/lib/shell/shell_scaffold.dart)） | 已完成 | 无 |
 | 今日页：日期问候、晨间简报、时间线、完成/跳过/调整、未排期、晚间复盘入口 | 时间线、简报、未排期、晚间复盘、完成/跳过、长按改期、未排期移入今天均已实现；远程模式写操作已接真实接口（[today_page.dart](../mobile/lib/features/today/today_page.dart)、[today_controller.dart](../mobile/lib/features/today/today_controller.dart)、[today_page_test.dart](../mobile/test/today_page_test.dart)） | 已完成 | 无 |
-| 对话页：Friday 主对话、7 类卡片、流式回复、输入条、草稿、状态覆盖 | 已实现；Mock 支持 7 类卡片与逐段流式；`USE_REMOTE=true` 时 Chat 接入真实接口：首屏最新 N 条、after 轮询、单条状态补偿、失败重试、前后台暂停，以及 SSE 逐 token 流式与断线回退轮询（[chat_page.dart](../mobile/lib/features/chat/chat_page.dart)、[remote_chat_repository.dart](../mobile/lib/data/remote/remote_chat_repository.dart)、[chat_page_test.dart](../mobile/test/chat_page_test.dart)、[remote_chat_repository_test.dart](../mobile/test/remote_chat_repository_test.dart)） | 已完成 | 卡片应答后续 |
+| 对话页：Friday 主对话、7 类卡片、流式回复、输入条、草稿、状态覆盖 | 已实现；Mock 支持 7 类卡片与逐段流式；`USE_REMOTE=true` 时 Chat 接入真实接口：首屏最新 N 条、after 轮询、单条状态补偿、失败重试、前后台暂停、SSE 逐 token 流式，以及记忆确认卡片的真实应答（[chat_page.dart](../mobile/lib/features/chat/chat_page.dart)、[remote_chat_repository.dart](../mobile/lib/data/remote/remote_chat_repository.dart)、[chat_page_test.dart](../mobile/test/chat_page_test.dart)、[remote_chat_repository_test.dart](../mobile/test/remote_chat_repository_test.dart)） | 已完成 | 其它卡片远程应答后续 |
 | JarvisIntroCard：接受后依次出现诊断 ChoiceCard、ThinkingCard、PlanProposalCard | Mock 仓库已实现该顺序与终态约束（[mock_chat_repository.dart](../mobile/lib/data/mock/mock_chat_repository.dart)） | 仅 Mock | Mobile U3 |
 | 调试面板：模拟时间、网络、数据集、主题、文字缩放、发送失败 | 已实现，debug 下长按今日页标题进入（[debug_panel_page.dart](../mobile/lib/features/debug/debug_panel_page.dart)、[debug_panel_test.dart](../mobile/test/debug_panel_test.dart)） | 已完成 | 无 |
 | Mock 仓库与 Provider 装配：简单 Stream、模拟延迟、离线队列、错误注入 | 已实现；Provider 层只暴露接口，features 不直接 import data/mock（[providers.dart](../mobile/lib/core/providers.dart)、[mock_chat_repository.dart](../mobile/lib/data/mock/mock_chat_repository.dart)） | 已完成 | 无 |
-| 真实后端接入、真实流式、数据库读写 | Today、Chat、任务页与我的页均已接真实 API：`Remote*Repository`，通过 `USE_REMOTE=true` 开启；Chat 支持 SSE 流式（单进程 broker，失败回退轮询）；卡片应答仍仅 Mock（[remote_today_repository.dart](../mobile/lib/data/remote/remote_today_repository.dart)、[remote_chat_repository.dart](../mobile/lib/data/remote/remote_chat_repository.dart)、[remote_task_repository.dart](../mobile/lib/data/remote/remote_task_repository.dart)、[providers.dart](../mobile/lib/core/providers.dart)） | 部分实现 | 真实流式已接入；卡片/通知后续 |
+| 真实后端接入、真实流式、数据库读写 | Today、Chat、任务页与我的页均已接真实 API：`Remote*Repository`，通过 `USE_REMOTE=true` 开启；Chat 支持 SSE 流式（单进程 broker，失败回退轮询）与记忆确认卡片应答；其它卡片应答仍仅 Mock（[remote_today_repository.dart](../mobile/lib/data/remote/remote_today_repository.dart)、[remote_chat_repository.dart](../mobile/lib/data/remote/remote_chat_repository.dart)、[remote_task_repository.dart](../mobile/lib/data/remote/remote_task_repository.dart)、[providers.dart](../mobile/lib/core/providers.dart)） | 部分实现 | 其它卡片/通知后续 |
 | 任务页/我的页内容 | 任务页：列表（未完成/已完成/全部）、完成/跳过/撤销、排进今天，写操作复用 Today 接口；我的页：昵称、时区、日界线、数据源、版本与调试入口（[tasks_page.dart](../mobile/lib/features/tasks/tasks_page.dart)、[profile_page.dart](../mobile/lib/features/profile/profile_page.dart)、[mobile_tasks.py](../app/api/routes/mobile_tasks.py)、[mobile_profile.py](../app/api/routes/mobile_profile.py)） | 已完成（只读我的页） | 后续设置项 |
 | 系统通知、后台推送、通知权限 | 应用内提醒已实现：App 前台每 30 秒轮询 `GET /api/mobile/reminders/due`，Shell 级横幅展示，同一 trigger 本会话只提示一次，关闭仅本地隐藏（[reminder_controller.dart](../mobile/lib/features/reminders/reminder_controller.dart)、[mobile_reminders.py](../app/api/routes/mobile_reminders.py)）。不做 OS 通知、后台推送、通知权限与 APNs/FCM | 部分实现（应用内） | OS 通知/远程推送后续 |
 | 会话同步协议、多会话、Jarvis 专题、邀请卡幂等、PriorityAlert | 已从 U1 移出并归档，待后端接口方案确定（[mobile-sync-and-topics.md](./deferred/mobile-sync-and-topics.md)） | 未实现 | Mobile U3 |
 | 截图归档与真机验收 | 6 张浅/深色组件渲染截图已生成；真机安装验收待执行（[README.md](../mobile/README.md)、[screenshots](../mobile/screenshots)） | 部分实现 | U1 收尾 |
-| 单元/组件/对比度/缩放测试，analyze/format/test/build apk | 144 项测试通过（3 项截图生成测试默认跳过）；四条命令已通过（[README.md](../mobile/README.md)） | 已完成 | 无 |
+| 单元/组件/对比度/缩放测试，analyze/format/test/build apk | 150 项测试通过（3 项截图生成测试默认跳过）；四条命令已通过（[README.md](../mobile/README.md)） | 已完成 | 无 |
 
 ### 3.7 多模态与平台化
 
@@ -144,23 +144,23 @@
 
 - 开发期 `X-Butler-User` 不是真实认证，只允许本机或 `adb reverse`，不能暴露到局域网或公网。
 - 只支持单进程 API（用户串行锁是进程内 `asyncio.Lock`）；多 worker/多副本需要数据库队列或租约。
-- 无服务端推送/WebSocket；SSE 真流式已实现（单进程 broker）；Remote 模式不支持卡片应答。
+- 无服务端推送/WebSocket；SSE 真流式已实现（单进程 broker）；Remote 模式已支持记忆确认卡片应答，其它卡片仍不支持。
 - 多会话、未读/已读、同步协议、Jarvis 专题仍留后续。
 - 飞书聊天的发送 outbox/幂等不在 U2-A 范围内。
 
 ## 四、主要缺口清单
 
 1. **Jarvis 慢通道**：从智能体、状态机到长期任务、重规划、周复盘、任务专属记忆全部未开始。
-2. **记忆闭环**：检索注入代码已完成但默认关闭；`confirmed` 升级与确认交互未实现。
-3. **真实移动端数据**：Today/Chat/任务页/我的页/应用内提醒均已接真实 API；OS 通知/远程推送与卡片应答仍未实现。
+2. **记忆中心**：确认闭环已完成；仍缺可查看、修改、删除长期记忆的画像页与记忆中心接口。
+3. **真实移动端数据**：Today/Chat/任务页/我的页/应用内提醒均已接真实 API；OS 通知/远程推送与其它卡片应答仍未实现。
 4. **富消息渲染**：后端出站意图抽象存在，但飞书 adapter 只发文本，7 类卡片无法在真实渠道渲染。
 5. **多模态与多渠道**：语音/图片/文件、微信等渠道、iOS/HarmonyOS、多租户均未排期。
 
 ## 五、建议的推进顺序
 
-1. **阶段 3b 收尾**：开启记忆注入并实机验证；补 `confirmed` 升级与确认卡片；把 `remember` 的 `pending_confirmation` 变成可交互流程。
+1. **阶段 3b 收尾（已完成）**：记忆注入默认开启；`confirmed` 升级、手机确认卡片与 `remember` 待确认流程已落地；剩余实机验收随 Mobile 真机验收执行。
 2. **阶段 4**：先做 Jarvis 的最小闭环（立项 → 拆解 → 计划提案 → 重规划 → 周复盘），再补任务专属记忆表。
-3. **Mobile U2**：Today/Chat/任务页/我的页/应用内提醒/SSE 已落地；剩余 OS 通知与远程推送、卡片应答与设置项。
+3. **Mobile U2**：Today/Chat/任务页/我的页/应用内提醒/SSE/记忆确认卡片已落地；剩余 OS 通知与远程推送、其它卡片应答与设置项。
 4. **Mobile U3**：按 deferred 文档恢复同步协议、多会话、Jarvis 专题、邀请幂等与 PriorityAlert。
 5. **未排期**：多模态、更多渠道、多租户、iOS/HarmonyOS。
 

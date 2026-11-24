@@ -2,6 +2,15 @@
 
 ## 变更记录
 
+### 变更（阶段 3b：记忆确认与注入默认开启）
+1. 记忆检索注入默认开启：`MEMORY_INJECT_ENABLED` 默认 true；显式设为 false 时仍按阶段 3 修复 F 的规则写 `memory_context` 审计，只是不注入。
+2. `remember` 槽位冲突时不再降低旧 active 记忆权重，只把 `contradict_count` 加 1；同时创建 `status=pending`、`supersedes_id=旧记忆` 的候选，返回 `pending_confirmation` 并附 pending 记忆 id、subject、value、type、slot_key。
+3. 用户确认 pending 记忆：pending → active、`source_class=confirmed`、weight=1.0，旧记忆 superseded；拒绝：pending → retracted 并记录 rejected_at，旧记忆保持 active。确认/拒绝分别写 memory_decision_log（SUPERSEDE/user_confirmed、NOOP/user_rejected）；旧记忆已非 active 时 pending 置 retracted（NOOP/stale_target）；同一旧记忆的其它 pending 在确认时一并 retracted（NOOP/superseded_pending）。
+4. 手机聊天新增卡片事件：`event_log(type="card", direction="outbound", channel="mobile")`，payload `{card_type:"memory_confirm", text, items:[{item_id, label}]}`；幂等键 `mobile-card:{inbound_event_id}:{pending_memory_id}`；`occurred_at` 比同轮文本回复晚 1µs，文本回复为空时也写卡片。
+5. Chat 历史/游标/单条状态扩展为 `type IN ('message','card')`；文本消息 `kind="text"`，记忆卡片 `kind="memory_confirm"`。卡片 item 状态按 Memory 当前状态实时派生：pending | confirmed | rejected（retracted 或未确认的历史记忆按 rejected 展示），卡片事件本身只存快照。
+6. 新增 `POST /api/mobile/chat/messages/{id}/card-actions`：body `{action: "confirm" | "reject", itemId?}`；省略 itemId 表示确认卡片内全部 pending item；itemId 必须属于该卡片，否则 400。
+7. 移动端记忆卡片改为逐条双按钮「确认替换 / 保留原值」；远程仅支持记忆卡片的卡片应答，其它卡片仍由 Mock 支撑。
+
 ### 变更（U2-B Mobile U2 剩余）
 1. 新增 `GET /api/mobile/tasks`：只读任务列表（open/done/all），附带最早的未来计划块；写操作复用 Today 端点，不新增任务写接口。
 2. 新增 `GET /api/mobile/profile`：只读用户资料（displayName、timezone、dayStart、createdAt）。
@@ -221,17 +230,26 @@ Capabilities：can_push_unsolicited、push_credits、can_update_message、suppor
 
 `GET /api/mobile/chat/messages?limit=50&after=<event_id>&before=<event_id>`
 
-- 只返回 `user_id=当前用户 AND channel='mobile' AND type='message' AND direction IN ('inbound','outbound')`。
+- 只返回 `user_id=当前用户 AND channel='mobile' AND type IN ('message','card') AND direction IN ('inbound','outbound')`。
 - 首屏（无游标）：先按 `occurred_at DESC, id DESC` 取最新 `limit` 条，再反转为升序返回；`limit` 1–100，默认 50。
-- `after` 取游标之后的增量；`before` 取游标之前的更早历史；二者不能同时使用。游标必须是同一用户的手机聊天事件，否则 400。
+- `after` 取游标之后的增量；`before` 取游标之前的更早历史；二者不能同时使用。游标必须是同一用户的手机聊天事件（message 或 card），否则 400。
 - `messages` 始终按 `occurred_at ASC, id ASC`；响应含 `nextCursor`、`previousCursor`、`hasMore`。
 
 `GET /api/mobile/chat/messages/{id}`
 
 - 校验事件归属当前用户且 `channel='mobile'`、`type='message'`，否则 404；用于 `processing → done/failed` 的状态补偿。
 
-消息结构：`{id, clientMessageId, role: user | friday, text, status, replyToId, createdAt}`。
+`POST /api/mobile/chat/messages/{id}/card-actions`
 
+- 校验事件归属当前用户且 `channel='mobile'`、`type='card'`、`payload.card_type='memory_confirm'`，否则 404。
+- body：`{action: "confirm" | "reject", itemId?}`；`itemId` 省略时对卡片内全部 pending 记忆执行该动作。
+- `itemId` 必须属于该卡片的 items（即 pending 记忆 id），否则 400；找不到对应 pending 记忆返回 404。
+- 返回该卡片的当前结构（见下）；重复确认幂等，不会产生第二条 active 记忆。
+
+消息结构：`{id, kind, clientMessageId, role: user | friday, text, status, replyToId, createdAt}`。
+
+- 文本消息 `kind="text"`；记忆确认卡片 `kind="memory_confirm"`，额外含 `items: [{itemId, label, state}]`、`allHandled`、`allConfirmed`。
+- 卡片 item `state`：`pending | confirmed | rejected`，按 Memory 当前状态实时派生；`rejected` 同时覆盖用户拒绝与已失效的历史记忆。
 - 入站 `status`：`processing | done | failed`；没有 `inbound_processing` 行时按 `failed` 返回并记录告警。
 - 手机出站 `status`：`available`（已落库、App 可取），不使用 `sent`；`replyToId` 为对应入站事件 id。
 - 不返回 `tool_call`、`tool_result`、`note`、`memory_context`、`delivery`、`trigger` 等事件。
