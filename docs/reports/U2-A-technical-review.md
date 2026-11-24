@@ -5,6 +5,13 @@
 > 审查方式：以当前仓库代码为准，逐条追踪真实调用关系；不根据旧文档推断实现。  
 > 本次只新增本报告，未修改业务代码、测试代码或配置。
 
+> **修订说明（2026-11-24）**：本报告是 U2-A 开发前的审查快照（基线 `faf87fd`），第 2、3、5、9、10 部分中的“现状/缺口/未实现”均指当时状态。U2-A（A1–A5）与后续 U2-B（任务页、我的页、应用内提醒、SSE 真流式）已完成并提交（`09218a5`…`1aada4b`）。阅读现状请以 [contracts.md](../contracts.md)、[feature-status-matrix.md](../feature-status-matrix.md) 与当前代码为准；本报告保留为决策与验收依据。主要已变化项：
+>
+> - H6：`sendText` 已支持 `clientMessageId`，本地重试复用原 id。
+> - H7：`update_task`、`update_reminder`、`list_notes` 已实现并注册；`update_reminder` 使用 `SELECT ... FOR UPDATE` 防止与 Worker 竞争。
+> - `MobileAdapter` 已实现；`Capabilities.streaming` 在 U2-B4 改为 true（SSE 拉流，仍不主动推送）。
+> - 手机 Chat 的 POST、历史、单条状态、SSE 与 Flutter `RemoteChatRepository` 已实现。
+
 ---
 
 ## 第一部分：审查基线
@@ -229,6 +236,8 @@ Flutter ChatPage
 
 #### 2.3.7 移动端 API 现状
 
+> **后续状态（2026-11-24）**：以下 2.3.7/2.3.8 描述的是 U2-A 开发前的现状。现在已新增 `/api/mobile/chat/*`、`/tasks`、`/profile`、`/reminders/due` 与 SSE 流；Flutter Chat 已有 `RemoteChatRepository` 与 `SseClient`。
+
 - `app/api/routes/mobile.py` 目前只有 Today 读写接口：
   - `GET /api/mobile/today`
   - `POST /api/mobile/today/items/{id}/complete|skip|restore|reschedule`
@@ -432,6 +441,8 @@ Flutter ChatPage
 - **建议**：把接口改为 `sendText(String text, {String? clientMessageId})` 或等价的命名参数；本地重试必须复用原 `clientMessageId`。Mock 仓库也实现该参数，保持两种模式一致。
 - **是否影响 U2-A**：是，U2-A3 必须完成。
 
+> **后续状态（2026-11-24）**：已实现。`ChatRepository.sendText` 接受 `clientMessageId`，`ChatController.retry` 在本地发送失败时复用原 id；见 [chat_repository.dart](../../mobile/lib/domain/repositories/chat_repository.dart)、[chat_controller.dart](../../mobile/lib/features/chat/chat_controller.dart)。
+
 #### H7. 方案目标超出当前工具覆盖
 
 - **问题**：方案要求“修改任务、修改提醒、查询笔记”；现有工具只有：
@@ -455,6 +466,8 @@ Flutter ChatPage
      - 不新增表；笔记仍以 event_log 为事实来源。
 - **注册**：在 `app/tools/registry.py` 的 `TOOLS` 中注册三个工具；更新工具 schema 测试。
 - **是否影响 U2-A**：是，U2-A4 必须完成；不能把“修改任务/提醒、查询笔记”悄悄移出验收。
+
+> **后续状态（2026-11-24）**：H7 已按上述产品决定完成。三个工具已在 [registry.py](../../app/tools/registry.py) 注册；`update_reminder` 先 `SELECT ... FOR UPDATE` 再校验 pending；`reschedule_block` 与 Today 改期规则统一；测试见 [test_mobile_chat_tools.py](../../tests/integration/test_mobile_chat_tools.py)。
 
 #### H8. `X-Butler-User` 不是真实认证，公网部署会越权
 
@@ -558,6 +571,8 @@ Flutter ChatPage
 ---
 
 ## 第五部分：文件级开发清单
+
+> **后续状态（2026-11-24）**：本清单的“P0/P1、新增/修改”是当时计划；U2-A1–A5 已全部完成。其中 `MobileAdapter` 的能力声明已在 U2-B4 更新为 `streaming=true`（SSE 拉流）。
 
 ### 5.1 后端
 
@@ -1049,6 +1064,8 @@ GET /api/mobile/chat/messages/{id}
 
 ## 第九部分：验收测试计划
 
+> **后续状态（2026-11-24）**：下列 10 项验收已在 U2-A5 全部通过；后端全量 292 passed / 1 skipped，移动端 144 passed / 3 skipped。
+
 | # | 场景 | 预期 | 测试层 |
 |---|---|---|---|
 | 1 | 手机正常聊天 | POST 返回 202；轮询看到用户消息和 Friday 文本回复；回复有 replyToId | 后端 API + Flutter 仓库/页面 |
@@ -1142,8 +1159,8 @@ GET /api/mobile/chat/messages/{id}
 ### 10.5 哪些内容应留到后续阶段？
 
 - Jarvis 专题对话、长期任务、重规划、周复盘。
-- 手机系统通知、后台推送、通知权限。
-- WebSocket/SSE、真实流式回复。
+- OS 系统通知、后台推送、通知权限（U2-B3 仅实现应用内提醒）。
+- WebSocket；SSE 真流式已在 U2-B4 落地。
 - 语音、图片、文件输入。
 - 长期记忆自动读取/注入（`MEMORY_INJECT_ENABLED` 保持关闭）。
 - 多会话、会话同步协议、`ConversationSyncEngine`、多端已读/未读。

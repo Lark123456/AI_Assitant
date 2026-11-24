@@ -1,7 +1,7 @@
 # Butler 功能对照表
 
-> 核对日期：2026-11-23  
-> 代码基线：`master`（U2-A5 验收阶段）  
+> 核对日期：2026-11-24  
+> 代码基线：`master`（U2-B 完成）  
 > 口径：以已确认的契约与执行计划为准，对照当前代码、测试与运行配置。  
 > 依据：[contracts.md](./contracts.md)、[system-guide.md](./system-guide.md)、[mobile-u1-plan.md](./mobile-u1-plan.md)、[deferred/mobile-sync-and-topics.md](./deferred/mobile-sync-and-topics.md)、代码与测试。  
 > 说明：`system-guide.md` 第二节的能力清单停留在阶段 3a，本表以当前代码为准；两者冲突时以本表与 `contracts.md` 为准。
@@ -34,11 +34,11 @@
 |---|---|---|
 | 阶段 3b 收尾 | 记忆确认升级 `confirmed`、确认交互、检索注入启用与实机验证 | 契约已预留，未完成 |
 | 阶段 4 | Jarvis 慢通道、长期任务立项/拆解/规划、重规划、周复盘、任务专属记忆 | 契约仅预留任务专属记忆表，尚无正式计划 |
-| Mobile U2 | 真实后端接入、任务页/我的页、系统通知、真实流式 | 建议阶段，尚未立项 |
+| Mobile U2 | 真实后端接入、任务页/我的页、系统通知、真实流式 | 进行中：Today/Chat（SSE）/任务页/我的页/应用内提醒已落地；OS 通知与卡片应答未接 |
 | Mobile U3 | 会话同步协议、多会话、Jarvis 专题、邀请幂等、PriorityAlert | 已归档到 deferred，待后端接口方案确定 |
 | 未排期 | 多模态、更多渠道、多租户、iOS/HarmonyOS | 未排期 |
 
-> 阶段 4 与 Mobile U2/U3 是按现有契约和延后文档归纳的建议划分，不代表已正式立项。
+> 阶段 4 与 Mobile U3 是按现有契约和延后文档归纳的建议划分，不代表已正式立项；Mobile U2 已落地大部分能力。
 
 ## 三、对照表
 
@@ -90,7 +90,7 @@
 | 记忆读取：按相关性检索 slot / preference / episode，注入 Friday 提示词 | `retrieve.py` 已实现模型隔离向量检索、slot 有效期去重、预算裁剪、来源标注、超时降级与 `memory_context` 审计；测试覆盖（[retrieve.py](../app/memory/retrieve.py)、[test_friday_memory_injection.py](../tests/integration/test_friday_memory_injection.py)） | 部分实现 | 阶段 3b 收尾（启用并实机验证） |
 | 记忆检索默认开启 | `MEMORY_INJECT_ENABLED` 默认 `false`，当前 `.env` 未设置；运行中 Friday 不会注入长期记忆（[config.py](../app/core/config.py)） | 未实现 | 阶段 3b 收尾 |
 | 用户确认后把 `stated` 升级为 `confirmed`，提供确认摘要/卡片 | `source_class=confirmed` 只在权重与检索中预留；没有确认写入路径与确认卡片；Mobile 的 `MemoryConfirmCard` 仅为 Mock（[weights.py](../app/memory/weights.py)、[memory_confirm 卡片](../mobile/lib/domain/models/chat_message.dart)） | 未实现 | 阶段 3b 收尾 |
-| 记忆中心/画像页，可查看、修改、删除长期记忆 | 无后端接口与移动端页面 | 未实现 | Mobile U2 |
+| 记忆中心/画像页，可查看、修改、删除长期记忆 | 无后端接口与移动端页面 | 未实现 | 未排期（记忆确认属阶段 3b） |
 | 记忆质量评测与门槛 | `memory-eval-v2`、131 条用例、precision/recall 1.0、错记 0、静默覆盖 0（[run_memory_evals.py](../scripts/run_memory_evals.py)、[memory_cases.yaml](../tests/evals/memory_cases.yaml)；历史 v2/v2.1 报告见 [memory-eval-report-v2.md](./memory-eval-report-v2.md)） | 已完成 | 无 |
 
 ### 3.5 Jarvis 慢通道
@@ -144,7 +144,7 @@
 
 - 开发期 `X-Butler-User` 不是真实认证，只允许本机或 `adb reverse`，不能暴露到局域网或公网。
 - 只支持单进程 API（用户串行锁是进程内 `asyncio.Lock`）；多 worker/多副本需要数据库队列或租约。
-- 无服务端推送、WebSocket/SSE 与真实流式；Remote 模式不支持卡片应答。
+- 无服务端推送/WebSocket；SSE 真流式已实现（单进程 broker）；Remote 模式不支持卡片应答。
 - 多会话、未读/已读、同步协议、Jarvis 专题仍留后续。
 - 飞书聊天的发送 outbox/幂等不在 U2-A 范围内。
 
@@ -152,7 +152,7 @@
 
 1. **Jarvis 慢通道**：从智能体、状态机到长期任务、重规划、周复盘、任务专属记忆全部未开始。
 2. **记忆闭环**：检索注入代码已完成但默认关闭；`confirmed` 升级与确认交互未实现。
-3. **真实移动端数据**：Today 与 Chat 已接真实 API；任务页、我的页、系统通知与真实流式仍未实现。
+3. **真实移动端数据**：Today/Chat/任务页/我的页/应用内提醒均已接真实 API；OS 通知/远程推送与卡片应答仍未实现。
 4. **富消息渲染**：后端出站意图抽象存在，但飞书 adapter 只发文本，7 类卡片无法在真实渠道渲染。
 5. **多模态与多渠道**：语音/图片/文件、微信等渠道、iOS/HarmonyOS、多租户均未排期。
 
@@ -160,7 +160,7 @@
 
 1. **阶段 3b 收尾**：开启记忆注入并实机验证；补 `confirmed` 升级与确认卡片；把 `remember` 的 `pending_confirmation` 变成可交互流程。
 2. **阶段 4**：先做 Jarvis 的最小闭环（立项 → 拆解 → 计划提案 → 重规划 → 周复盘），再补任务专属记忆表。
-3. **Mobile U2**：Today 与 Chat 已接真实后端；补任务页/我的页、系统通知与真实流式。
+3. **Mobile U2**：Today/Chat/任务页/我的页/应用内提醒/SSE 已落地；剩余 OS 通知与远程推送、卡片应答与设置项。
 4. **Mobile U3**：按 deferred 文档恢复同步协议、多会话、Jarvis 专题、邀请幂等与 PriorityAlert。
 5. **未排期**：多模态、更多渠道、多租户、iOS/HarmonyOS。
 

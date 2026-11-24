@@ -14,7 +14,7 @@
 
 ### 变更（U2-A 手机聊天）
 1. 手机入口复用已认证 User：新增 `InboundPipeline.ingest_for_user(event, user, client_message_id)`；不调用 `get_or_create_user`，不创建 `channel=mobile` 的 channel_identity；白名单由 Mobile API 的 `get_mobile_user` 完成。
-2. 新增 `MobileAdapter`：channel=mobile，start no-op，send 只返回 ok，不写 event_log；能力声明为不支持主动推送、流式与按钮。它只用于 adapter 注册、recovery 渠道过滤与能力声明，正常手机路径不调用 send。
+2. 新增 `MobileAdapter`：channel=mobile，start no-op，send 只返回 ok，不写 event_log；能力声明为不支持主动推送与按钮（U2-B4 起支持 SSE 拉流，见下方 U2-B 变更）。它只用于 adapter 注册、recovery 渠道过滤与能力声明，正常手机路径不调用 send。
 3. 手机安全完成路径：`FridayAgent.handle` 返回后，在同一事务写 outbound 与 `inbound_processing(done)`，随后直接返回，跳过 `MobileAdapter.send` 与 outbound 事务 B；Agent 异常时回滚半途写入，再写兜底回复并置 done。
 4. 手机 outbound payload：`{text, delivery: "persisted", reply_to_event_id, client_message_id}`；不使用 `send_ok`；幂等键 `mobile-reply:{inbound_event_id}`，同一入站事件至多一条回复。
 5. 手机入站 payload：在通用 payload 基础上带 `client_message_id`；入站幂等键 `mobile-chat:{user_id}:{clientMessageId}`，同一用户同一 clientMessageId 只产生一条入站事件。
