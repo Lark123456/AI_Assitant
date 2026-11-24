@@ -16,7 +16,7 @@ import asyncio
 import json
 import uuid
 from collections.abc import AsyncIterator
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, Response
@@ -29,9 +29,10 @@ from app.adapters.base import InboundEvent
 from app.api.routes.mobile import get_mobile_user, get_session, resolve_mobile_user
 from app.core.logging import get_logger
 from app.core.tasks import spawn
-from app.db.models import EventLog, InboundProcessing, User
+from app.db.models import EventLog, InboundProcessing, Memory, User
 from app.engine.pipeline import InboundPipeline, IngestedEvent
 from app.engine.streaming import ChatStreamBroker, StreamMessage
+from app.memory.confirm import PendingMemoryNotFound, decide_pending_memory
 
 router = APIRouter(prefix="/api/mobile/chat")
 logger = get_logger(__name__)
@@ -53,6 +54,13 @@ class SendMessageRequest(BaseModel):
 
     client_message_id: str = Field(alias="clientMessageId")
     text: str
+
+
+class CardActionRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    action: Literal["confirm", "reject"]
+    item_id: str | None = Field(default=None, alias="itemId")
 
 
 def _chat_lock(state: Any, user_id: uuid.UUID) -> asyncio.Lock:
@@ -109,6 +117,7 @@ def _message_item(event: EventLog, *, status: str | None, tz: str) -> dict:
     inbound = event.direction == "inbound"
     return {
         "id": str(event.id),
+        "kind": "text",
         "clientMessageId": payload.get("client_message_id"),
         "role": "user" if inbound else "friday",
         "text": str(payload.get("text", "")),
@@ -118,23 +127,99 @@ def _message_item(event: EventLog, *, status: str | None, tz: str) -> dict:
     }
 
 
+def _memory_state(memory: Memory) -> str:
+    if memory.status == "pending":
+        return "pending"
+    if memory.status == "retracted":
+        return "rejected"
+    if memory.source_class == "confirmed":
+        return "confirmed"
+    return "rejected"
+
+
+async def _card_states(
+    session: AsyncSession, user: User, events: list[EventLog]
+) -> dict[str, str]:
+    """批量查询卡片引用的 pending 记忆，返回 item_id → 展示状态。"""
+    memory_ids: set[uuid.UUID] = set()
+    for event in events:
+        if event.type != "card":
+            continue
+        for item in (event.payload or {}).get("items", []):
+            raw = item.get("item_id") if isinstance(item, dict) else None
+            try:
+                memory_ids.add(uuid.UUID(raw))
+            except (TypeError, ValueError):
+                continue
+    if not memory_ids:
+        return {}
+    rows = (
+        (
+            await session.execute(
+                select(Memory).where(
+                    Memory.user_id == user.id, Memory.id.in_(memory_ids)
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    return {str(memory.id): _memory_state(memory) for memory in rows}
+
+
+def _card_item(event: EventLog, *, states: dict[str, str], tz: str) -> dict:
+    payload = event.payload or {}
+    items = []
+    for item in payload.get("items", []):
+        if not isinstance(item, dict):
+            continue
+        item_id = item.get("item_id")
+        if not isinstance(item_id, str) or not item_id:
+            continue
+        items.append(
+            {
+                "itemId": item_id,
+                "label": str(item.get("label", "")),
+                "state": states.get(item_id, "rejected"),
+            }
+        )
+    return {
+        "id": str(event.id),
+        "kind": "memory_confirm",
+        "clientMessageId": None,
+        "role": "friday",
+        "text": str(payload.get("text", "")),
+        "status": "available",
+        "replyToId": None,
+        "createdAt": event.occurred_at.astimezone(ZoneInfo(tz)).isoformat(),
+        "items": items,
+        "allHandled": all(item["state"] != "pending" for item in items),
+        "allConfirmed": bool(items)
+        and all(item["state"] == "confirmed" for item in items),
+    }
+
+
 async def _serialize(
-    session: AsyncSession, events: list[EventLog], tz: str
+    session: AsyncSession, events: list[EventLog], tz: str, user: User
 ) -> list[dict]:
     statuses = await _inbound_statuses(
         session, [event.id for event in events if event.direction == "inbound"]
     )
+    states = await _card_states(session, user, events)
     return [
-        _message_item(event, status=statuses.get(event.id), tz=tz) for event in events
+        _message_item(event, status=statuses.get(event.id), tz=tz)
+        if event.type == "message"
+        else _card_item(event, states=states, tz=tz)
+        for event in events
     ]
 
 
 def _chat_conditions(user: User) -> list[Any]:
-    """聊天事实来源边界：只取本用户的手机 message 事件。"""
+    """聊天事实来源边界：本用户的手机 message / card 事件。"""
     return [
         EventLog.user_id == user.id,
         EventLog.channel == "mobile",
-        EventLog.type == "message",
+        EventLog.type.in_(("message", "card")),
         EventLog.direction.in_(("inbound", "outbound")),
     ]
 
@@ -152,7 +237,7 @@ async def _resolve_cursor(
         event is None
         or event.user_id != user.id
         or event.channel != "mobile"
-        or event.type != "message"
+        or event.type not in ("message", "card")
         or event.direction not in ("inbound", "outbound")
     ):
         raise HTTPException(status_code=400, detail="游标无效")
@@ -294,7 +379,7 @@ async def list_messages(
         has_more = len(rows) > limit
         events = list(reversed(rows[:limit]))
 
-    messages = await _serialize(session, events, user.timezone)
+    messages = await _serialize(session, events, user.timezone, user)
     return {
         "messages": messages,
         "nextCursor": messages[-1]["id"] if messages else None,
@@ -325,6 +410,26 @@ async def _load_mobile_message(
         or event.direction not in directions
     ):
         raise HTTPException(status_code=404, detail="消息不存在")
+    return event
+
+
+async def _load_card_event(
+    session: AsyncSession, user: User, message_id: str
+) -> EventLog:
+    """取当前用户的手机 outbound 卡片事件。"""
+    try:
+        event_id = uuid.UUID(message_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail="卡片不存在") from exc
+    event = await session.get(EventLog, event_id)
+    if (
+        event is None
+        or event.user_id != user.id
+        or event.channel != "mobile"
+        or event.type != "card"
+        or event.direction != "outbound"
+    ):
+        raise HTTPException(status_code=404, detail="卡片不存在")
     return event
 
 
@@ -413,6 +518,56 @@ async def get_message(
         session, [event.id] if event.direction == "inbound" else []
     )
     return _message_item(event, status=statuses.get(event.id), tz=user.timezone)
+
+
+@router.post("/messages/{message_id}/card-actions")
+async def act_on_card(
+    message_id: str,
+    body: CardActionRequest,
+    request: Request,
+    user: Annotated[User, Depends(get_mobile_user)],
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> dict:
+    """确认或拒绝记忆卡片中的 pending 记忆。
+
+    只允许操作该卡片 payload 内的 item；重复操作幂等，返回卡片当前状态。
+    """
+    event = await _load_card_event(session, user, message_id)
+    raw_items = (event.payload or {}).get("items", [])
+    allowed = [
+        item["item_id"]
+        for item in raw_items
+        if isinstance(item, dict)
+        and isinstance(item.get("item_id"), str)
+        and item["item_id"]
+    ]
+    if not allowed:
+        raise HTTPException(status_code=400, detail="卡片没有可处理项")
+
+    targets = allowed if body.item_id is None else [body.item_id]
+    if body.item_id is not None and body.item_id not in allowed:
+        raise HTTPException(status_code=400, detail="itemId 不属于该卡片")
+
+    for raw in dict.fromkeys(targets):
+        try:
+            pending_id = uuid.UUID(raw)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail="itemId 无效") from exc
+        try:
+            await decide_pending_memory(
+                session,
+                user=user,
+                pending_id=pending_id,
+                confirm=body.action == "confirm",
+                clock=request.app.state.clock,
+            )
+        except PendingMemoryNotFound:
+            # 卡片引用的记忆已被清理：保留现状，不阻断其它项。
+            continue
+    await session.commit()
+
+    states = await _card_states(session, user, [event])
+    return _card_item(event, states=states, tz=user.timezone)
 
 
 @router.get("/messages/{message_id}/stream")

@@ -209,9 +209,9 @@ async def test_crash_before_outbound_rolls_back_tools_and_recovery(
     assert outbound[0].channel == "mobile"
     assert outbound[0].user_id == user.id
     assert await pipeline.recover_unfinished() == 0
-    # MEMORY_INJECT_ENABLED 默认关闭：手机 Agent 不注入长期记忆
+    # MEMORY_INJECT_ENABLED 默认开启：手机 Agent 会尝试注入长期记忆
     assert contexts
-    assert all(context.payload["enabled"] is False for context in contexts)
+    assert all(context.payload["enabled"] is True for context in contexts)
 
 
 async def test_concurrent_same_client_message_id_single_execution(

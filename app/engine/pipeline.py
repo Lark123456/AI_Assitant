@@ -13,6 +13,7 @@ U2-A2（手机渠道）：
 - MobileAdapter.send 不会被正常手机路径调用，也不写 event_log。
 """
 
+import datetime as dt
 import uuid
 from dataclasses import dataclass
 
@@ -36,6 +37,15 @@ logger = get_logger(__name__)
 
 # 处理链路故障时的兜底回复；带 trace 片段便于用户报障后定位日志
 FALLBACK_REPLY = "抱歉，我这边出了点故障，这条消息没能处理，请稍后再试。（trace: {trace}）"
+
+
+def _card_pending_id(card: dict, index: int) -> str:
+    items = card.get("items")
+    if isinstance(items, list) and items:
+        item_id = items[0].get("item_id")
+        if isinstance(item_id, str) and item_id:
+            return item_id
+    return str(index)
 
 
 @dataclass(frozen=True)
@@ -204,6 +214,12 @@ class InboundPipeline:
                 if is_mobile and self._stream_broker is not None:
                     self._stream_broker.publish(ingested.event_id, text)
 
+            cards: list[dict] = []
+
+            def emit_card(card: dict) -> None:
+                if is_mobile:
+                    cards.append(card)
+
             # 事务 A：agent + 工具写入。先短读用户并 commit 释放连接，再进 LLM 循环，
             # 避免第一次模型调用期间持有事务。
             async with self._sessionmaker() as session:
@@ -224,6 +240,7 @@ class InboundPipeline:
                         text=ingested.event.text,
                         embedder=self._embedder,
                         on_delta=emit_delta if is_mobile else None,
+                        on_card=emit_card if is_mobile else None,
                     )
                 except Exception:
                     # 故障兜底：回滚事务（丢弃半途写入），回复兜底文案而非沉默
@@ -231,7 +248,7 @@ class InboundPipeline:
                     await session.rollback()
                     reply = FALLBACK_REPLY.format(trace=ingested.trace_id[:8])
                 if is_mobile:
-                    # 手机安全完成路径：回复、工具写入与 done 同一事务提交。
+                    # 手机安全完成路径：回复、卡片、工具写入与 done 同一事务提交。
                     # 中途崩溃则整体回滚，recovery 重跑不会留下半成品；
                     # 这里不调用 MobileAdapter.send，也不写 send_ok。
                     outbound = (
@@ -239,6 +256,25 @@ class InboundPipeline:
                         if reply
                         else None
                     )
+                    base_time = (
+                        outbound.occurred_at if outbound is not None else self._clock.now()
+                    )
+                    for index, card in enumerate(cards):
+                        await append_event(
+                            session,
+                            user_id=ingested.user_id,
+                            channel="mobile",
+                            direction="outbound",
+                            type="card",
+                            payload=card,
+                            trace_id=ingested.trace_id,
+                            clock=self._clock,
+                            occurred_at=base_time + dt.timedelta(microseconds=index + 1),
+                            idempotency_key=(
+                                f"mobile-card:{ingested.event_id}:"
+                                f"{_card_pending_id(card, index)}"
+                            ),
+                        )
                     await self._apply_status(session, ingested.event_id, "done")
                     await session.commit()
                     if self._stream_broker is not None:

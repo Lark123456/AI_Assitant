@@ -54,6 +54,7 @@ class FridayAgent:
         text: str,
         embedder: EmbeddingService | None = None,
         on_delta: Callable[[str], None] | None = None,
+        on_card: Callable[[dict], None] | None = None,
     ) -> str:
         """处理一条用户消息，返回回复文本。"""
         ctx = ToolContext(
@@ -146,11 +147,53 @@ class FridayAgent:
                 tool_result: BaseModel = await execute_tool(
                     ctx, tc.name, tc.arguments, call_index=call_seq
                 )
+                if (
+                    on_card is not None
+                    and tc.name == "remember"
+                    and getattr(tool_result, "status", "") == "pending_confirmation"
+                ):
+                    card = _memory_card_payload(tool_result)
+                    if card is not None:
+                        on_card(card)
                 messages.append(
                     {"role": "tool", "tool_call_id": tc.id, "content": tool_result.model_dump_json()}
                 )
             last_content = result.content or ""
         return last_content or "抱歉，这轮操作步骤太多了，请换个说法再试一次。"
+
+
+def _value_text(value: object) -> str:
+    if isinstance(value, dict):
+        text = value.get("text")
+        if isinstance(text, str) and text:
+            return text
+        time_value = value.get("time")
+        if isinstance(time_value, str):
+            return time_value
+    if isinstance(value, str):
+        return value
+    return ""
+
+
+def _memory_card_payload(tool_result: BaseModel) -> dict | None:
+    """把 remember 的 pending_confirmation 转成手机确认卡片。"""
+    data = getattr(tool_result, "data", None)
+    if not isinstance(data, dict):
+        return None
+    pending_id = data.get("pending_memory_id")
+    if not isinstance(pending_id, str) or not pending_id:
+        return None
+    subject = data.get("pending_subject") or data.get("existing_subject") or "记忆"
+    new_value = _value_text(data.get("pending_value"))
+    old_value = _value_text(data.get("existing_value"))
+    label = f"{subject}：{new_value}" if new_value else str(subject)
+    if old_value:
+        label = f"{label}（原 {old_value}）"
+    return {
+        "card_type": "memory_confirm",
+        "text": "有一条记忆需要确认",
+        "items": [{"item_id": pending_id, "label": label}],
+    }
 
 
 def build_retrieval_query(history: list[dict], text: str) -> str:

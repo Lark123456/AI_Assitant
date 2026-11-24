@@ -117,6 +117,9 @@ async def test_remember_slot_conflict_returns_pending_confirmation(
         ).scalars().all()
     assert len(memories) == 2
     assert memories[0].status == "active"
+    # 确认前不降权；只记录矛盾次数
+    assert memories[0].weight == 0.8
+    assert memories[0].contradict_count == 1
     assert memories[1].status == "pending"
     assert memories[1].supersedes_id == memories[0].id
 

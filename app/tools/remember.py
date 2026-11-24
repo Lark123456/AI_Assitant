@@ -98,6 +98,10 @@ async def _run_remember(ctx: ToolContext, args: dict) -> ToolResult:
                 "existing_memory_id": str(existing.id) if existing else None,
                 "existing_subject": existing.subject if existing else None,
                 "existing_value": existing.value if existing else None,
+                "pending_subject": pending.subject if pending else None,
+                "pending_value": pending.value if pending else None,
+                "pending_type": pending.type if pending else None,
+                "slot_key": pending.slot_key if pending else None,
             },
             message="已有不同的记录，是否用新值替换？",
         )

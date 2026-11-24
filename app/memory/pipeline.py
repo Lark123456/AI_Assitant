@@ -35,7 +35,6 @@ from app.memory.resolve import (
 from app.memory.scope import scope_valid_to
 from app.memory.validate import ValidatedCandidate
 from app.memory.weights import (
-    contradicted_weight,
     initial_weight,
     max_weight,
     reinforced_weight,
@@ -335,8 +334,8 @@ async def _apply_decision(
             ):
                 await _reinforce(session, memory, candidate, user=user, clock=clock)
             if action == "ASK":
+                # 只记录矛盾次数；权重在用户确认后才变化，拒绝时旧记忆保持原权重。
                 memory.contradict_count = (memory.contradict_count or 0) + 1
-                memory.weight = contradicted_weight(float(memory.weight or 0.0))
             memory_id = memory.id
 
     if action == "ADD":
