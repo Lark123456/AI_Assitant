@@ -81,6 +81,36 @@ final class _SpyRepository implements ChatRepository {
   }
 }
 
+/// 记录卡片应答的仓库，用于记忆确认卡双按钮测试。
+final class _MemoryCardRepository implements ChatRepository {
+  _MemoryCardRepository(this.card);
+
+  final MemoryConfirmCard card;
+  final actions = <CardAction>[];
+
+  @override
+  Stream<List<ChatMessage>> watchMessages() async* {
+    yield [card];
+  }
+
+  @override
+  Future<void> sendText(String text, {String? clientMessageId}) async {}
+
+  @override
+  Future<void> setActive(bool active) async {}
+
+  @override
+  Stream<String?> watchSyncError() => const Stream<String?>.empty();
+
+  @override
+  Future<void> respondToCard({
+    required String messageId,
+    required CardAction action,
+  }) async {
+    actions.add(action);
+  }
+}
+
 TextMessage _text(
   String id,
   String text, {
@@ -217,6 +247,40 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text(S.done), findsOneWidget);
+  });
+
+  testWidgets('记忆确认卡逐条显示确认替换与保留原值', (tester) async {
+    final card = MemoryConfirmCard(
+      id: 'memory-1',
+      sender: ChatSender.friday,
+      createdAt: _now,
+      items: const [
+        MemoryCandidateItem(itemId: 'm1', label: '起床时间：8点（原 7点）'),
+        MemoryCandidateItem(itemId: 'm2', label: '通勤方式：地铁'),
+      ],
+    );
+    final repository = _MemoryCardRepository(card);
+    await tester.pumpWidget(_app(repository: repository));
+    await tester.pumpAndSettle();
+
+    expect(find.text('起床时间：8点（原 7点）'), findsOneWidget);
+    expect(find.text('通勤方式：地铁'), findsOneWidget);
+    expect(find.text(S.memoryConfirmReplace), findsNWidgets(2));
+    expect(find.text(S.memoryKeepOld), findsNWidgets(2));
+
+    await tester.tap(find.text(S.memoryConfirmReplace).first);
+    await tester.pumpAndSettle();
+
+    var action = repository.actions.single as MemoryAction;
+    expect(action.itemId, 'm1');
+    expect(action.confirmed, isTrue);
+
+    await tester.tap(find.text(S.memoryKeepOld).last);
+    await tester.pumpAndSettle();
+
+    action = repository.actions.last as MemoryAction;
+    expect(action.itemId, 'm2');
+    expect(action.confirmed, isFalse);
   });
 
   testWidgets('JarvisIntroCard 接受后追加后续消息', (tester) async {

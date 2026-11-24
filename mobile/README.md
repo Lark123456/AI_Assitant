@@ -145,8 +145,9 @@ adb reverse tcp:8000 tcp:8000
 后端接口：
 
 - `POST /api/mobile/chat/messages`：body `{clientMessageId, text}`；`clientMessageId` 是唯一业务标识，请求头 `Idempotency-Key` 若出现必须与它一致。
-- `GET /api/mobile/chat/messages?limit=50&after=<id>&before=<id>`：首屏先取最新 N 条再升序返回；`after` 只取增量，`before` 向上翻更早历史。
+- `GET /api/mobile/chat/messages?limit=50&after=<id>&before=<id>`：首屏先取最新 N 条再升序返回；`after` 只取增量，`before` 向上翻更早历史；同时返回文本消息与记忆确认卡片。
 - `GET /api/mobile/chat/messages/{id}`：单条状态补偿，用于发现 processing → done/failed。
+- `POST /api/mobile/chat/messages/{id}/card-actions`：body `{action: "confirm" | "reject", itemId?}`；省略 `itemId` 表示确认卡片内全部 pending 记忆。目前只支持 `memory_confirm` 卡片。
 
 客户端行为：
 
@@ -155,7 +156,14 @@ adb reverse tcp:8000 tcp:8000
 - 服务端已确认 `failed` 的消息不会原地重跑，重试会生成新的 `clientMessageId`。
 - `processing` 的入站消息由单条状态接口补偿，不会一直停在“Friday 正在处理”。
 - App 进入后台或切离 Chat Tab 时停止轮询；回前台/回到 Chat 时由 `setActive(true)` 立即刷新。
-- Remote 已支持 SSE 流式回复（失败静默回退轮询）；卡片应答仍仅 Mock 模式可用。
+- Remote 已支持 SSE 流式回复（失败静默回退轮询）与记忆确认卡片的真实应答；其它卡片应答仍仅 Mock 模式可用。
+
+### 记忆确认卡片（阶段 3b）
+
+- 当 `remember` 与已有槽位冲突时，后端返回 `pending_confirmation`，并在同一轮写入 `kind=memory_confirm` 卡片事件。
+- 卡片按条展示「新值（原旧值）」，每条提供「确认替换 / 保留原值」两个按钮；确认后卡片状态变为已确认，拒绝后保持原值。
+- 卡片状态由后端按 Memory 当前状态实时派生；同一卡片重复确认幂等，不会产生第二条 active 记忆。
+- 后端 `MEMORY_INJECT_ENABLED` 默认开启；确认后的记忆以 `source_class=confirmed` 参与后续检索注入。
 
 ### SSE 流式
 
@@ -195,7 +203,7 @@ adb reverse tcp:8000 tcp:8000
 
 ## 验收状态
 
-- `analyze` / `format` / `test` / `build apk --debug`：通过（144 项测试；3 项截图生成测试默认跳过）
+- `analyze` / `format` / `test` / `build apk --debug`：通过（150 项测试；3 项截图生成测试默认跳过）
 - APK SDK：`sdkVersion 26`、`targetSdkVersion 36`
 - 应用名：`Butler`（Android label；包名仍为 `com.butler.mobile`）
 - 最新 Debug APK：`build/app/outputs/flutter-apk/app-debug.apk`

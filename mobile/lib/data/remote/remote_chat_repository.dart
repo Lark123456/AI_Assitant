@@ -125,13 +125,55 @@ class RemoteChatRepository implements ChatRepository {
     }
   }
 
-  /// 远程模式暂不支持卡片应答（服务端只返回文字消息）。
+  /// 记忆确认卡片：确认/拒绝走真实后端；其它卡片仍不支持远程应答。
   @override
   Future<void> respondToCard({
     required String messageId,
     required CardAction action,
   }) async {
-    throw UnsupportedError('远程聊天暂不支持卡片应答');
+    final index = _messages.indexWhere((message) => message.id == messageId);
+    if (index < 0 || _messages[index] is! MemoryConfirmCard) {
+      throw UnsupportedError('远程仅支持记忆确认卡片');
+    }
+    final card = _messages[index] as MemoryConfirmCard;
+    final Map<String, dynamic> body;
+    switch (action) {
+      case MemoryAction(:final itemId, :final confirmed):
+        body = {'action': confirmed ? 'confirm' : 'reject', 'itemId': itemId};
+      case ConfirmAllMemoryAction():
+        body = {'action': 'confirm'};
+      default:
+        throw UnsupportedError('该卡片动作暂不支持远程应答');
+    }
+    final raw = await client.postJson(
+      '/api/mobile/chat/messages/${Uri.encodeComponent(messageId)}/card-actions',
+      body,
+      idempotencyKey: _newClientMessageId(),
+    );
+    final rawItems = raw['items'];
+    if (rawItems is! List || rawItems.isEmpty) {
+      throw const ApiException('卡片响应缺少 items');
+    }
+    final labels = {for (final item in card.items) item.itemId: item.label};
+    final items = <MemoryCandidateItem>[];
+    for (final item in rawItems) {
+      if (item is! Map<String, dynamic>) {
+        throw const ApiException('卡片 item 格式错误');
+      }
+      final itemId = item['itemId'];
+      if (itemId is! String || itemId.isEmpty) {
+        throw const ApiException('卡片 item 缺少 itemId');
+      }
+      items.add(
+        MemoryCandidateItem(
+          itemId: itemId,
+          label: (item['label'] as String?) ?? labels[itemId] ?? itemId,
+          state: _memoryState(item['state']),
+        ),
+      );
+    }
+    _replaceById(messageId, card.copyWith(items: items));
+    _emitIfChanged();
   }
 
   Future<void> _ensureLoaded() {
@@ -200,8 +242,20 @@ class RemoteChatRepository implements ChatRepository {
     }
   }
 
-  void _merge(List<TextMessage> incoming) {
+  void _merge(List<ChatMessage> incoming) {
     for (final remote in incoming) {
+      if (remote is! TextMessage) {
+        // 卡片等非文本消息按事件 id 覆盖，确保状态更新能推送。
+        final index = _messages.indexWhere(
+          (message) => message.id == remote.id,
+        );
+        if (index >= 0) {
+          _messages[index] = remote;
+        } else {
+          _messages.add(remote);
+        }
+        continue;
+      }
       if (remote.sender == ChatSender.friday && remote.replyToId != null) {
         // 服务端最终回复到达后移除同一条入站的流式占位气泡。
         _removeById('stream-${remote.replyToId}');
@@ -247,26 +301,29 @@ class RemoteChatRepository implements ChatRepository {
     );
   }
 
-  List<TextMessage> _parseMessages(Map<String, dynamic> raw) {
+  List<ChatMessage> _parseMessages(Map<String, dynamic> raw) {
     final list = raw['messages'];
     if (list is! List) {
       throw const ApiException('messages 必须是数组');
     }
-    return [for (final item in list) _parseMessage(item)];
+    final messages = <ChatMessage>[];
+    for (final item in list) {
+      final parsed = _parseMessage(item);
+      if (parsed != null) messages.add(parsed);
+    }
+    return messages;
   }
 
-  TextMessage _parseMessage(Object? raw) {
+  ChatMessage? _parseMessage(Object? raw) {
     if (raw is! Map<String, dynamic>) {
       throw const ApiException('消息必须是对象');
     }
     final id = raw['id'];
     final role = raw['role'];
-    final text = raw['text'];
     final createdAt = raw['createdAt'];
     if (id is! String ||
         id.isEmpty ||
         role is! String ||
-        text is! String ||
         createdAt is! String) {
       throw const ApiException('消息字段不完整');
     }
@@ -275,6 +332,49 @@ class RemoteChatRepository implements ChatRepository {
       'friday' => ChatSender.friday,
       _ => throw ApiException('未知 role：$role'),
     };
+    final kind = raw['kind'];
+
+    if (kind == 'memory_confirm') {
+      final rawItems = raw['items'];
+      if (rawItems is! List || rawItems.isEmpty) {
+        throw const ApiException('记忆卡片 items 不能为空');
+      }
+      final items = <MemoryCandidateItem>[];
+      for (final item in rawItems) {
+        if (item is! Map<String, dynamic>) {
+          throw const ApiException('记忆卡片 item 格式错误');
+        }
+        final itemId = item['itemId'];
+        final label = item['label'];
+        if (itemId is! String ||
+            itemId.isEmpty ||
+            label is! String ||
+            label.isEmpty) {
+          throw const ApiException('记忆卡片 item 字段不完整');
+        }
+        items.add(
+          MemoryCandidateItem(
+            itemId: itemId,
+            label: label,
+            state: _memoryState(item['state']),
+          ),
+        );
+      }
+      return MemoryConfirmCard(
+        id: id,
+        sender: sender,
+        createdAt: DateTime.parse(createdAt).toLocal(),
+        syncState: SyncState.synced,
+        items: items,
+      );
+    }
+
+    final text = raw['text'];
+    if (text is! String) {
+      // 未知且无文本的卡片类型：跳过，避免整页解析失败。
+      if (kind != null && kind != 'text') return null;
+      throw const ApiException('消息字段不完整');
+    }
     final status = raw['status'];
     return TextMessage(
       id: id,
@@ -289,6 +389,12 @@ class RemoteChatRepository implements ChatRepository {
       replyToId: _stringOrNull(raw['replyToId']),
     );
   }
+
+  MemoryCandidateState _memoryState(Object? raw) => switch (raw) {
+    'confirmed' => MemoryCandidateState.confirmed,
+    'rejected' => MemoryCandidateState.rejected,
+    _ => MemoryCandidateState.pending,
+  };
 
   void _startStream(String inboundId) {
     final sse = client is SseClient ? client as SseClient : null;
@@ -421,7 +527,7 @@ class RemoteChatRepository implements ChatRepository {
     _messages[index] = local.copyWith(serverId: serverId, syncState: syncState);
   }
 
-  void _replaceById(String id, TextMessage next) {
+  void _replaceById(String id, ChatMessage next) {
     final index = _messages.indexWhere((message) => message.id == id);
     if (index >= 0) _messages[index] = next;
   }
@@ -465,6 +571,8 @@ class RemoteChatRepository implements ChatRepository {
   String _signatureOf(ChatMessage message) => switch (message) {
     TextMessage(:final id, :final text, :final syncState, :final serverId) =>
       '$id:$text:${syncState.name}:$serverId',
+    MemoryConfirmCard(:final id, :final items) =>
+      '$id:${items.map((item) => '${item.itemId}:${item.state.name}').join(',')}',
     _ => message.id,
   };
 

@@ -6,6 +6,7 @@ import 'package:mobile/core/strings.dart';
 import 'package:mobile/data/remote/api_client.dart';
 import 'package:mobile/data/remote/remote_chat_repository.dart';
 import 'package:mobile/domain/enums.dart';
+import 'package:mobile/domain/models/card_action.dart';
 import 'package:mobile/domain/models/chat_message.dart';
 
 class _FixedClock implements Clock {
@@ -29,6 +30,7 @@ class _FakeApiClient implements ApiClient {
   onPost;
 
   final List<String> getPaths = [];
+  final List<String> postPaths = [];
   final List<String> postKeys = [];
   final List<Map<String, dynamic>> postBodies = [];
 
@@ -44,6 +46,7 @@ class _FakeApiClient implements ApiClient {
     Map<String, dynamic> body, {
     required String idempotencyKey,
   }) {
+    postPaths.add(path);
     postKeys.add(idempotencyKey);
     postBodies.add(body);
     return onPost(path, body, idempotencyKey);
@@ -111,6 +114,27 @@ Map<String, dynamic> _page(
   'nextCursor': nextCursor,
   'previousCursor': messages.isEmpty ? null : messages.first['id'],
   'hasMore': false,
+};
+
+Map<String, dynamic> _cardMessage({
+  String id = 'card1',
+  String text = '要更新「起床时间」吗？',
+  String createdAt = '2026-11-23T09:00:01+08:00',
+  List<Map<String, dynamic>> items = const [
+    {'itemId': 'mem-1', 'label': '起床时间：8点（原 7点）', 'state': 'pending'},
+  ],
+}) => {
+  'id': id,
+  'kind': 'memory_confirm',
+  'role': 'friday',
+  'text': text,
+  'status': 'available',
+  'clientMessageId': null,
+  'replyToId': null,
+  'createdAt': createdAt,
+  'items': items,
+  'allHandled': false,
+  'allConfirmed': false,
 };
 
 RemoteChatRepository _repository(ApiClient client) => RemoteChatRepository(
@@ -518,6 +542,151 @@ void main() {
     expect(friday.length, 1);
     expect(friday.single.serverId, 'r1');
     expect(friday.single.text, '轮询回复');
+    await repository.setActive(false);
+  });
+
+  test('解析记忆确认卡片，未知无文本卡片跳过', () async {
+    final client = _FakeApiClient(
+      onGet: (path) async => _page([
+        _message(id: 'm1', text: '记住我 8 点起床'),
+        _cardMessage(),
+        {
+          'id': 'x1',
+          'kind': 'plan_proposal',
+          'role': 'friday',
+          'createdAt': '2026-11-23T09:00:02+08:00',
+        },
+      ], nextCursor: 'x1'),
+      onPost: (path, body, key) async => {},
+    );
+    final repository = _repository(client);
+    addTearDown(repository.dispose);
+
+    final messages = await repository.watchMessages().first;
+
+    expect(messages.length, 2);
+    final card = messages.whereType<MemoryConfirmCard>().single;
+    expect(card.id, 'card1');
+    expect(card.items.single.itemId, 'mem-1');
+    expect(card.items.single.label, '起床时间：8点（原 7点）');
+    expect(card.items.single.state, MemoryCandidateState.pending);
+  });
+
+  test('respondToCard 逐条确认发 POST 并推送新状态', () async {
+    final client = _FakeApiClient(
+      onGet: (path) async => _page([_cardMessage()], nextCursor: 'card1'),
+      onPost: (path, body, key) async => {
+        'id': 'card1',
+        'kind': 'memory_confirm',
+        'items': [
+          {'itemId': 'mem-1', 'label': '起床时间：8点（原 7点）', 'state': 'confirmed'},
+        ],
+      },
+    );
+    final repository = _repository(client);
+    addTearDown(repository.dispose);
+    await repository.watchMessages().first;
+
+    final updates = <List<ChatMessage>>[];
+    final subscription = repository.watchMessages().skip(1).listen(updates.add);
+    addTearDown(subscription.cancel);
+    // 等异步流跳过首帧并订阅广播流后再应答。
+    await Future<void>.delayed(Duration.zero);
+
+    await repository.respondToCard(
+      messageId: 'card1',
+      action: const MemoryAction(itemId: 'mem-1', confirmed: true),
+    );
+    await Future<void>.delayed(Duration.zero);
+
+    expect(
+      client.postPaths.single,
+      '/api/mobile/chat/messages/card1/card-actions',
+    );
+    expect(client.postBodies.single, {'action': 'confirm', 'itemId': 'mem-1'});
+    expect(updates, isNotEmpty);
+    final card = updates.last.whereType<MemoryConfirmCard>().single;
+    expect(card.items.single.state, MemoryCandidateState.confirmed);
+    expect(card.allConfirmed, isTrue);
+  });
+
+  test('respondToCard 拒绝与全部确认使用对应请求体', () async {
+    final client = _FakeApiClient(
+      onGet: (path) async => _page([_cardMessage()], nextCursor: 'card1'),
+      onPost: (path, body, key) async => {
+        'id': 'card1',
+        'kind': 'memory_confirm',
+        'items': [
+          {'itemId': 'mem-1', 'label': '起床时间：8点（原 7点）', 'state': 'rejected'},
+        ],
+      },
+    );
+    final repository = _repository(client);
+    addTearDown(repository.dispose);
+    await repository.watchMessages().first;
+
+    await repository.respondToCard(
+      messageId: 'card1',
+      action: const MemoryAction(itemId: 'mem-1', confirmed: false),
+    );
+    expect(client.postBodies.last, {'action': 'reject', 'itemId': 'mem-1'});
+
+    await repository.respondToCard(
+      messageId: 'card1',
+      action: const ConfirmAllMemoryAction(),
+    );
+    expect(client.postBodies.last, {'action': 'confirm'});
+    expect(client.postPaths.length, 2);
+  });
+
+  test('respondToCard 对非记忆卡片抛 UnsupportedError 且不发请求', () async {
+    final client = _FakeApiClient(
+      onGet: (path) async => _page([_message(id: 'm1')], nextCursor: 'm1'),
+      onPost: (path, body, key) async => {},
+    );
+    final repository = _repository(client);
+    addTearDown(repository.dispose);
+    await repository.watchMessages().first;
+
+    await expectLater(
+      repository.respondToCard(
+        messageId: 'm1',
+        action: const ConfirmAction(confirmed: true),
+      ),
+      throwsA(isA<UnsupportedError>()),
+    );
+    expect(client.postPaths, isEmpty);
+  });
+
+  test('轮询返回的卡片状态变化会重新推送', () async {
+    var calls = 0;
+    final client = _FakeApiClient(
+      onGet: (path) async {
+        calls += 1;
+        if (calls == 1) return _page([_cardMessage()], nextCursor: 'card1');
+        return _page([
+          _cardMessage(
+            items: const [
+              {
+                'itemId': 'mem-1',
+                'label': '起床时间：8点（原 7点）',
+                'state': 'rejected',
+              },
+            ],
+          ),
+        ], nextCursor: 'card1');
+      },
+      onPost: (path, body, key) async => {},
+    );
+    final repository = _repository(client);
+    addTearDown(repository.dispose);
+    await repository.watchMessages().first;
+
+    await repository.setActive(true);
+    final messages = await repository.watchMessages().first;
+
+    final card = messages.whereType<MemoryConfirmCard>().single;
+    expect(card.items.single.state, MemoryCandidateState.rejected);
     await repository.setActive(false);
   });
 }

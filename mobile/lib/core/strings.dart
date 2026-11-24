@@ -130,6 +130,8 @@ abstract final class S {
   static const jarvisPlan = '请 Jarvis 规划';
   static const jarvisLater = '暂时不用';
   static const confirmAll = '全部确认';
+  static const memoryConfirmReplace = '确认替换';
+  static const memoryKeepOld = '保留原值';
   static const memoryConfirm = '确认';
   static const memoryReject = '忽略';
   static const planAccept = '接受';

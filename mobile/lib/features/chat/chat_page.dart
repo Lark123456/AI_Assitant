@@ -545,6 +545,22 @@ class _MemoryCardView extends ConsumerWidget {
 
   final MemoryConfirmCard card;
 
+  Future<void> _respond(
+    BuildContext context,
+    WidgetRef ref,
+    CardAction action,
+  ) async {
+    try {
+      await ref
+          .read(chatControllerProvider.notifier)
+          .respondToCard(card.id, action);
+    } catch (_) {
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context)
+          .showSnackBar(const SnackBar(content: Text(S.actionFailed)));
+    }
+  }
+
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final theme = Theme.of(context);
@@ -555,27 +571,57 @@ class _MemoryCardView extends ConsumerWidget {
           for (final item in card.items)
             Padding(
               padding: const EdgeInsets.only(bottom: AppSpacing.xs),
-              child: Row(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Expanded(
-                    child: Text(item.label, style: theme.textTheme.bodySmall),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          item.label,
+                          style: theme.textTheme.bodySmall,
+                        ),
+                      ),
+                      if (item.state != MemoryCandidateState.pending)
+                        Text(switch (item.state) {
+                          MemoryCandidateState.confirmed => S.done,
+                          MemoryCandidateState.rejected => S.skipped,
+                          MemoryCandidateState.pending => '',
+                        }, style: theme.textTheme.labelSmall),
+                    ],
                   ),
-                  Text(switch (item.state) {
-                    MemoryCandidateState.pending => '',
-                    MemoryCandidateState.confirmed => S.done,
-                    MemoryCandidateState.rejected => S.skipped,
-                  }, style: theme.textTheme.labelSmall),
+                  if (item.state == MemoryCandidateState.pending)
+                    Align(
+                      alignment: Alignment.centerRight,
+                      child: Wrap(
+                        spacing: AppSpacing.sm,
+                        children: [
+                          TextButton(
+                            onPressed: () => _respond(
+                              context,
+                              ref,
+                              MemoryAction(
+                                itemId: item.itemId,
+                                confirmed: false,
+                              ),
+                            ),
+                            child: const Text(S.memoryKeepOld),
+                          ),
+                          FilledButton.tonal(
+                            onPressed: () => _respond(
+                              context,
+                              ref,
+                              MemoryAction(
+                                itemId: item.itemId,
+                                confirmed: true,
+                              ),
+                            ),
+                            child: const Text(S.memoryConfirmReplace),
+                          ),
+                        ],
+                      ),
+                    ),
                 ],
-              ),
-            ),
-          if (!card.allHandled)
-            Align(
-              alignment: Alignment.centerRight,
-              child: FilledButton(
-                onPressed: () => ref
-                    .read(chatControllerProvider.notifier)
-                    .respondToCard(card.id, const ConfirmAllMemoryAction()),
-                child: const Text(S.confirmAll),
               ),
             ),
         ],
